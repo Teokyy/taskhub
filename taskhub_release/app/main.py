@@ -1433,25 +1433,53 @@ async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(de
 
 
 @app.put("/api/market/tasks/{task_id}")
-def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     if data.project_id or data.stage_id or data.tour_id:
         raise HTTPException(400, "Публичные задания не привязываются к проектам комнаты")
     reward = task_base_reward(data)
+    notify_executor = None
     with connect() as conn:
-        task = conn.execute("SELECT * FROM tasks WHERE id=? AND room_id IS NULL AND created_by=?", (task_id, account["id"])).fetchone()
+        task = conn.execute("""SELECT t.*,r.executor_id,u.telegram_id executor_telegram_id
+            FROM tasks t LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            LEFT JOIN users u ON u.id=r.executor_id
+            WHERE t.id=? AND t.room_id IS NULL AND t.created_by=?""", (task_id, account["id"])).fetchone()
         if not task:
             raise HTTPException(404, "Твоё задание не найдено")
-        if task["status"] != "available":
-            raise HTTPException(409, "Редактировать можно только открытое задание. Сначала заверши или отмени текущую работу.")
-        conn.execute("""UPDATE tasks SET title=?,description=?,category=?,reward_kop=?,deadline=?,pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND room_id IS NULL AND status='available'""",
-            (data.title.strip(), data.description.strip(), data.category.strip(), reward, data.deadline, data.pricing_model, data.norm_minutes, data.difficulty, data.urgency, reward, task_id, account["id"]))
-        conn.execute("DELETE FROM task_criteria WHERE task_id=?", (task_id,))
-        for pos, item in enumerate(data.criteria):
-            conn.execute("INSERT INTO task_criteria(task_id,title,weight,critical,position) VALUES(?,?,?,?,?)", (task_id, item.title.strip(), item.weight, int(item.critical), pos))
-        conn.execute("UPDATE tasks SET criteria_frozen=1 WHERE id=?", (task_id,))
-        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "edit_market_task", "task", task_id, "public_marketplace"))
-        return dict(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+        if task["status"] not in ("open","available","in_progress"):
+            raise HTTPException(409, "Это задание больше нельзя редактировать")
+        active_deal = task["status"] == "in_progress"
+        if active_deal and (reward != task["reward_kop"] or (data.category_id and data.category_id != task["category_id"]) or data.category != task["category"]):
+            raise HTTPException(409, "После выбора исполнителя награду и категорию менять нельзя")
+        category_label=task["category"]; category_id=task["category_id"]
+        if not active_deal and data.category_id:
+            category=conn.execute("""SELECT c.*,p.name parent_name FROM categories c JOIN categories p ON p.id=c.parent_id
+                WHERE c.id=? AND c.is_hidden=0 AND p.is_hidden=0""",(data.category_id,)).fetchone()
+            if not category: raise HTTPException(400,"Выбери доступную подкатегорию")
+            category_id=category["id"];category_label=category["parent_name"]+" / "+category["name"]
+        values={"title":data.title.strip(),"description":data.description.strip(),"category":category_label,
+                "category_id":category_id,"reward_kop":task["reward_kop"] if active_deal else reward,
+                "deadline":data.deadline}
+        for field,new_value in values.items():
+            old_value=task[field]
+            if str(old_value or "")!=str(new_value or ""):
+                conn.execute("INSERT INTO task_history(task_id,changed_by,field,old_value,new_value) VALUES(?,?,?,?,?)",
+                             (task_id,account["id"],field,str(old_value) if old_value is not None else None,str(new_value) if new_value is not None else None))
+        conn.execute("""UPDATE tasks SET title=?,description=?,category=?,category_id=?,reward_kop=?,deadline=?,
+            pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,updated_at=CURRENT_TIMESTAMP
+            WHERE id=? AND created_by=? AND room_id IS NULL""",
+            (values["title"],values["description"],values["category"],values["category_id"],values["reward_kop"],values["deadline"],
+             data.pricing_model if not active_deal else task["pricing_model"],data.norm_minutes if not active_deal else task["norm_minutes"],
+             data.difficulty if not active_deal else task["difficulty"],data.urgency if not active_deal else task["urgency"],
+             reward if not active_deal else task["fixed_reward_kop"],task_id,account["id"]))
+        if active_deal:
+            notify_executor=task["executor_telegram_id"]
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"],"edit_market_task","task",task_id,"active_deal="+str(active_deal)))
+        updated=dict(conn.execute("SELECT * FROM tasks WHERE id=?",(task_id,)).fetchone())
+    if notify_executor:
+        await notify_telegram(notify_executor,f"✏️ Заказчик изменил описание или срок задания «{updated['title']}». Ты можешь отказаться от сделки без штрафа.")
+    return updated
 
 
 @app.delete("/api/market/tasks/{task_id}")
