@@ -1492,6 +1492,7 @@ async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(de
              data.difficulty, data.urgency, reward, 0, "open", "approved"),
         )
         task_id = cur.lastrowid
+        conn.execute("INSERT OR IGNORE INTO achievements(user_id,code) VALUES(?,'first_task')",(account["id"],))
         if category_label=="Другое / Прочее":
             conn.execute("INSERT INTO category_requests(user_id,task_id,text) VALUES(?,?,?)",
                          (account["id"],task_id,(data.other_category_text or "").strip()))
@@ -1703,6 +1704,7 @@ async def create_market_response(task_id: int, data: MarketResponseIn, x_telegra
             if "UNIQUE" in str(exc): raise HTTPException(409,"Ты уже откликался на это задание")
             raise
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"create_response","response",cur.lastrowid,f"task_id={task_id}"))
+        conn.execute("INSERT OR IGNORE INTO achievements(user_id,code) VALUES(?,'first_response')",(account["id"],))
     await notify_telegram(task["owner_telegram_id"],f"✉️ Новый отклик на задание «{task['title']}»")
     return {"id":cur.lastrowid,"status":"sent"}
 
