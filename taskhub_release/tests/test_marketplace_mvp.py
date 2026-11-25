@@ -251,6 +251,16 @@ class MarketplaceMvpTests(unittest.TestCase):
             headers=self.headers("customer"),
         )
         self.assertEqual(first.json()["status"], "pending")
+        rejected = self.client.post(
+            f"/api/market/tasks/{task_id}/cancel-request/reject",
+            headers=self.headers("executor"),
+        )
+        self.assertEqual(rejected.status_code, 200, rejected.text)
+        first_again = self.client.post(
+            f"/api/market/tasks/{task_id}/cancel-request",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(first_again.json()["status"], "pending")
         second = self.client.post(
             f"/api/market/tasks/{task_id}/cancel-request",
             headers=self.headers("executor"),
