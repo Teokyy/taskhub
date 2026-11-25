@@ -167,6 +167,9 @@ def init_db():
         )
         # Additive migrations preserve the existing MVP database and its balances.
         _add_column(conn, "users", "photo_url TEXT")
+        _add_column(conn, "users", "role_flags TEXT NOT NULL DEFAULT 'both'")
+        _add_column(conn, "users", "onboarding_step INTEGER NOT NULL DEFAULT 0")
+        _add_column(conn, "users", "onboarding_completed_at TEXT")
         _add_column(conn, "tasks", "room_id INTEGER")
         for definition in (
             "project_id INTEGER REFERENCES projects(id)",
@@ -317,6 +320,12 @@ def init_db():
 
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS digest_windows(
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                window_start TEXT NOT NULL,
+                sent_at TEXT,
+                PRIMARY KEY(user_id,window_start)
+            );
             CREATE TABLE IF NOT EXISTS market_services(
                 id INTEGER PRIMARY KEY,
                 seller_id INTEGER NOT NULL REFERENCES users(id),
