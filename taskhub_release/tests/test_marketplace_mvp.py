@@ -284,11 +284,22 @@ class MarketplaceMvpTests(unittest.TestCase):
             headers=self.headers("customer"),
         )
         chat_id = accepted.json()["chat_id"]
-        self.client.post(
+        sent = self.client.post(
             f"/api/market/chats/{chat_id}/messages",
             headers=self.headers("executor"),
             json={"body": "Conversation visible to moderator"},
         )
+        self.assertEqual(sent.status_code, 200, sent.text)
+        hidden = self.client.post(
+            f"/api/market/messages/{sent.json()['id']}/hide",
+            headers=self.headers("executor"),
+        )
+        self.assertEqual(hidden.status_code, 200, hidden.text)
+        own_history = self.client.get(
+            f"/api/market/chats/{chat_id}/messages",
+            headers=self.headers("executor"),
+        )
+        self.assertEqual(own_history.json(), [])
         dispute = self.client.post(
             f"/api/market/tasks/{task_id}/disputes",
             headers=self.headers("executor"),
