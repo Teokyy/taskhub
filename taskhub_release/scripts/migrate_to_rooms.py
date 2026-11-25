@@ -139,14 +139,6 @@ def create_schema(conn: sqlite3.Connection) -> None:
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
-    CREATE TRIGGER IF NOT EXISTS budget_events_no_update
-        BEFORE UPDATE ON budget_events
-        BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END;
-
-    CREATE TRIGGER IF NOT EXISTS budget_events_no_delete
-        BEFORE DELETE ON budget_events
-        BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END;
-
     CREATE TABLE IF NOT EXISTS task_deadline_events (
         id INTEGER PRIMARY KEY,
         task_id INTEGER NOT NULL REFERENCES tasks(id),
@@ -160,6 +152,13 @@ def create_schema(conn: sqlite3.Connection) -> None:
     for statement in schema_sql.split(";"):
         if statement.strip():
             conn.execute(statement)
+
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS budget_events_no_update
+        BEFORE UPDATE ON budget_events
+        BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS budget_events_no_delete
+        BEFORE DELETE ON budget_events
+        BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END""")
 
     # Additive columns retain existing IDs and records. Nullable room_id permits
     # the transaction to create the legacy room and backfill all rows safely.
