@@ -21,13 +21,18 @@ function roomApiPath(path,opts={}){
  if(path==='/review')return prefix+'/review';
  if(path==='/team')return prefix+'/team';
  if(path==='/ledger')return prefix+'/ledger';
+ if(path==='/budget')return prefix+'/budget';
  if(path==='/projects')return prefix+'/projects';
  if(path.startsWith('/projects/'))return prefix+path;
  return path;
 }
 async function api(path,opts={}){
  let target=path;
- if(path!=='/me'&&path!=='/rooms'&&!path.startsWith('/rooms'))target=roomApiPath(path,opts);
+ if(path!=='/me'&&path!=='/rooms'&&!path.startsWith('/rooms')){
+  const roomScoped=/^\\/(tasks|ledger|budget|projects|team|moderation|review)(\\/|\\?|$)/.test(path);
+  if(roomScoped&&!activeRoom?.id)throw Error('Сначала выбери рабочую комнату. Загружаем её данные…');
+  target=roomApiPath(path,opts);
+ }
  const r=await fetch('/api'+target,{...opts,headers:{...headers,...opts.headers}});
  let data={};try{data=await r.json()}catch{}
  if(!r.ok)throw Error(data.detail||('Ошибка '+r.status));
@@ -59,7 +64,7 @@ async function refreshMe(){
 }
 function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab))}
 function setTab(next){tab=(next==='home'||next==='mine'||next==='balance')?'profile':next;nav();render()}
-async function toggleWorkMode(){const next=workMode()==='customer'?'executor':'customer';try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode:next})});activeRoom={...activeRoom,work_mode:next};toast(next==='customer'?'Режим изменён: заказчик':'Режим изменён: исполнитель');render()}catch(e){toast(e.message)}}
+async function toggleWorkMode(){if(!activeRoom?.id)return toast('Сначала выбери рабочую комнату');const next=workMode()==='customer'?'executor':'customer';try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode:next})});activeRoom={...activeRoom,work_mode:next};toast(next==='customer'?'Режим изменён: заказчик':'Режим изменён: исполнитель');render()}catch(e){toast(e.message)}}
 function greeting(){const h=new Date().getHours();return h<6?'Доброй ночи':h<12?'Доброе утро':h<18?'Добрый день':'Добрый вечер'}
 async function boot(){
  try{
@@ -101,6 +106,7 @@ function bindTaskActions(){view.querySelectorAll('[data-claim]').forEach(b=>b.on
 async function render(){
  const renderToken=++renderSequence;
  nav();
+ if(['exchange','profile','admin'].includes(tab)&&!activeRoom?.id){view.innerHTML='<div class="panel"><b>Подключаем рабочую комнату</b><p class="muted">Подожди загрузки списка комнат. Если экран не обновился, нажми «Комнаты».</p></div>';return;}
  if(tab==='room'){
   const mode=workMode()==='customer'?'Заказчик':'Исполнитель';
   view.innerHTML='<section class="hello"><div class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</div><h1>'+esc(activeRoom?.name||'Комната')+'</h1><p>Команда, участники и настройки общего пространства.</p></section><section class="panel"><div class="eyebrow">ТВОЯ РОЛЬ В КОМНАТЕ</div><div style="font-size:22px;font-weight:850;margin:7px 0">'+mode+'</div><div class="muted">'+(isAdmin()?'Владелец комнаты':'Участник комнаты')+'</div><div class="divider"></div><div class="task-bottom"><span class="muted">Рабочий режим</span><button class="btn secondary" id="room-switch-mode">Изменить</button></div></section><div class="section-head"><h2>Управление комнатой</h2></div><section class="panel"><b>Участники и доступ</b><p class="muted" style="margin:6px 0 12px">Приглашения, роли и настройки комнаты.</p><button class="btn block" id="room-manage">Открыть управление</button></section><section class="panel"><b>Работа комнаты</b><p class="muted" style="margin:6px 0 12px">Общие задачи и результаты команды доступны на бирже.</p><button class="btn secondary block" id="room-exchange">Перейти на биржу</button></section>';
@@ -129,6 +135,7 @@ async function render(){
  }
 }
 async function showFinanceScreen(){
+ if(!activeRoom?.id)return toast('Сначала выбери рабочую комнату');
  try{
   const finance=await api('/rooms/'+activeRoom.id+'/ledger');
   const rows=finance.entries||[];
