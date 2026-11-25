@@ -15,7 +15,7 @@ function roomApiPath(path,opts={}){
  if(path==='/tasks')return prefix+'/tasks';
  if(path.startsWith('/tasks?'))return prefix+'/tasks'+path.slice(6);
  if(path==='/tasks'&&opts.method==='POST')return prefix+'/tasks';
- let m=path.match(/^\/tasks\/(\d+)\/(claim|submit|moderate|review)$/);
+ let m=path.match(/^\/tasks\/(\d+)\/(claim|submit|moderate|review|refuse)$/);
  if(m)return prefix+'/tasks/'+m[1]+'/'+m[2];
  if(path==='/moderation')return prefix+'/moderation';
  if(path==='/review')return prefix+'/review';
@@ -29,7 +29,7 @@ function roomApiPath(path,opts={}){
 async function api(path,opts={}){
  let target=path;
  if(path!=='/me'&&path!=='/rooms'&&!path.startsWith('/rooms')){
-  const roomScoped=/^\\/(tasks|ledger|budget|projects|team|moderation|review)(\\/|\\?|$)/.test(path);
+  const roomScoped=/^\/(tasks|ledger|budget|projects|team|moderation|review)(\/|\?|$)/.test(path);
   if(roomScoped&&!activeRoom?.id)throw Error('Сначала выбери рабочую комнату. Загружаем её данные…');
   target=roomApiPath(path,opts);
  }
