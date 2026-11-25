@@ -154,7 +154,7 @@ class RoomApiIntegrationTests(unittest.TestCase):
 
     def test_invite_join_limit_and_duplicate_membership(self):
         owner = self.headers("owner-token")
-        worker = self.headers("worker-token")
+        worker = self.headers("reviewer-token")
         room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
         invite = self.client.post(
             f"/api/rooms/{room_id}/invites", headers=owner,
@@ -199,14 +199,11 @@ class RoomApiIntegrationTests(unittest.TestCase):
         owner = self.headers("owner-token")
         worker = self.headers("worker-token")
         reviewer = self.headers("reviewer-token")
-        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        room_id = self.client.post("/api/rooms", headers=owner, json={"name": "Role test room"}).json()["id"]
         joined = self.client.post(
             f"/api/rooms/{room_id}/invites", headers=owner,
             json={"expires_in_days": 7, "max_uses": 10},
         ).json()
-        self.assertEqual(self.client.post(
-            "/api/rooms/join", headers=worker, json={"code": joined["code"]}
-        ).status_code, 409)  # worker is already in the legacy room
         # Add reviewer through an invitation.
         self.assertEqual(self.client.post(
             "/api/rooms/join", headers=reviewer, json={"code": joined["code"]}
