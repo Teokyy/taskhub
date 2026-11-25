@@ -27,6 +27,10 @@ class RoomBudgetTests(unittest.TestCase):
             CREATE TABLE budget_events(id INTEGER PRIMARY KEY, room_id INTEGER,
                 task_id INTEGER, actor_id INTEGER, event_type TEXT, amount_kop INTEGER,
                 details TEXT DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+            CREATE TRIGGER budget_events_no_update BEFORE UPDATE ON budget_events
+                BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END;
+            CREATE TRIGGER budget_events_no_delete BEFORE DELETE ON budget_events
+                BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END;
             INSERT INTO rooms(id,budget_limit_kop) VALUES(1,10000),(2,5000);
             INSERT INTO projects(id,room_id,budget_kop) VALUES(20,1,10000);
             INSERT INTO stages(id,room_id,project_id,budget_kop) VALUES(30,1,20,5000);
