@@ -587,7 +587,7 @@ def submit_room_task(room_id: int, task_id: int, data: SubmitIn,
     with connect() as conn:
         ensure_rooms_schema(conn)
         try:
-            require_room_member(conn, room_id, account["id"])
+            require_room_mode(conn, room_id, account["id"], "executor")
         except RoomError as error:
             room_error(error)
         task = conn.execute(
