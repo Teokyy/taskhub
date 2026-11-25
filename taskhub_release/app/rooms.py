@@ -77,7 +77,7 @@ def set_work_mode(conn: sqlite3.Connection, room_id: int, user_id: int, new_mode
 
     # An executor is blocked by work they still owe; a customer is blocked
     # while submitted work awaits their decision. revision blocks both roles.
-    if old_mode in ("executor", None):
+    if old_mode == "executor" or (old_mode is None and new_mode == "customer"):
         blocked = conn.execute(
             """SELECT id,status FROM tasks
                WHERE room_id=? AND assignee_id=? AND status IN ('in_progress','revision')
@@ -89,7 +89,7 @@ def set_work_mode(conn: sqlite3.Connection, room_id: int, user_id: int, new_mode
                 f"Нельзя сменить режим: сначала закрой или отклони задачу №{blocked['id']}",
                 409,
             )
-    if old_mode in ("customer", None):
+    if old_mode == "customer" or (old_mode is None and new_mode == "executor"):
         blocked = conn.execute(
             """SELECT id,status FROM tasks
                WHERE room_id=? AND created_by=? AND status IN ('submitted','revision')
