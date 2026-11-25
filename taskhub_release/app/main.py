@@ -17,6 +17,7 @@ from .auth import verify_telegram_init_data
 from .db import connect, init_db
 from .rooms import (RoomError, create_room as create_room_record, list_rooms, set_work_mode as set_room_work_mode, require_admin as require_room_admin, require_member as require_room_member, require_mode as require_room_mode)
 from .room_task_actions import router as room_task_actions_router
+from .room_budgets import get_budget, set_budget_limit, reserve_task, release_task
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -135,6 +136,10 @@ class RoomModeIn(BaseModel):
     mode: str = Field(pattern="^(customer|executor)$")
 
 
+class RoomBudgetIn(BaseModel):
+    limit_rub: int | None = Field(default=None, ge=0, le=1000000000)
+
+
 def ensure_rooms_schema(conn):
     required = {"rooms", "room_members", "room_payout_settings"}
     found = {row["name"] for row in conn.execute(
@@ -146,6 +151,32 @@ def ensure_rooms_schema(conn):
 
 def room_error(error: RoomError):
     raise HTTPException(error.status_code, str(error))
+
+
+@app.get("/api/rooms/{room_id}/budget")
+def room_budget(room_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_member(conn, room_id, account["id"])
+            return get_budget(conn, room_id)
+        except RoomError as error:
+            room_error(error)
+
+
+@app.put("/api/rooms/{room_id}/budget")
+def update_room_budget(room_id: int, data: RoomBudgetIn,
+                       x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+            limit_kop = None if data.limit_rub is None else data.limit_rub * 100
+            return set_budget_limit(conn, room_id, account["id"], limit_kop)
+        except RoomError as error:
+            room_error(error)
 
 
 @app.get("/api/rooms/{room_id}/tasks")
@@ -398,7 +429,7 @@ def create_room_task(room_id: int, data: TaskIn,
             raise HTTPException(400, "Привязка к проектам будет подключена следующим этапом")
         status = "pending" if room["moderation_enabled"] else "available"
         moderation = "pending" if room["moderation_enabled"] else "approved"
-        reserve = reward if status == "available" else 0
+        reserve = 0
         cur = conn.execute(
             """INSERT INTO tasks(title,description,category,reward_kop,status,created_by,
                deadline,pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,
@@ -413,6 +444,11 @@ def create_room_task(room_id: int, data: TaskIn,
                 "INSERT INTO task_criteria(task_id,title,weight,critical,position) VALUES(?,?,?,?,?)",
                 (cur.lastrowid, item.title.strip(), item.weight, int(item.critical), pos),
             )
+        if status == "available":
+            try:
+                reserve_task(conn, room_id, cur.lastrowid, reward, account["id"])
+            except RoomError as error:
+                room_error(error)
         conn.execute(
             """INSERT INTO task_events(task_id,actor_id,event_type,from_status,to_status,details)
                VALUES(?,?, 'created',NULL,?,?)""",
@@ -506,7 +542,11 @@ def moderate_room_task(room_id: int, task_id: int, data: ModerationIn,
         if not task:
             raise HTTPException(404, "Задача не найдена или уже рассмотрена")
         if data.decision == "approve":
-            # Reserve at publication, never while pending.
+            # Reserve atomically at publication, never while pending.
+            try:
+                reserve_task(conn, room_id, task_id, int(task["reward_kop"]), account["id"])
+            except RoomError as error:
+                room_error(error)
             cur = conn.execute(
                 """UPDATE tasks SET status='available',moderation_status='approved',
                    budget_reserved_kop=reward_kop,moderation_comment=?,moderated_by=?,
@@ -570,6 +610,7 @@ def review_room_task(room_id: int, task_id: int, data: ReviewIn,
         if cur.rowcount != 1:
             raise HTTPException(409, "Работа уже рассмотрена")
         if data.decision == "accept":
+            release_task(conn, room_id, task_id, account["id"], "spent")
             amount = int(round(task["reward_kop"] * QUALITY_FACTORS[data.quality]))
             conn.execute(
                 """INSERT INTO ledger(user_id,task_id,room_id,amount_kop,kind,note)
@@ -582,10 +623,7 @@ def review_room_task(room_id: int, task_id: int, data: ReviewIn,
                 (task_id, room_id),
             )
         elif data.decision == "reject":
-            conn.execute(
-                "UPDATE tasks SET budget_reserved_kop=0 WHERE id=? AND room_id=?",
-                (task_id, room_id),
-            )
+            release_task(conn, room_id, task_id, account["id"], "released")
         conn.execute(
             """INSERT INTO task_events(task_id,actor_id,event_type,from_status,to_status,details)
                VALUES(?,?,?,?,?,?)""",
