@@ -245,6 +245,13 @@ def init_db():
                 read_at TEXT,
                 hidden_for_user_id INTEGER REFERENCES users(id)
             );
+            CREATE TABLE IF NOT EXISTS message_hides(
+                message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(message_id,user_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_message_hides_user ON message_hides(user_id,message_id);
             CREATE TABLE IF NOT EXISTS task_history(
                 id INTEGER PRIMARY KEY,
                 task_id INTEGER NOT NULL REFERENCES tasks(id),
