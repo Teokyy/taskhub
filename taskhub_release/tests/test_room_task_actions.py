@@ -48,7 +48,7 @@ class RefuseTaskTests(unittest.TestCase):
 
     def test_cannot_refuse_task_from_another_room(self):
         with self.assertRaises(RoomError):
-            refuse_task(self.conn, 11, 3, 7)
+            refuse_task(self.conn, 10, 3, 7)
 
     def test_cannot_refuse_after_submission_for_revision(self):
         with self.assertRaises(RoomError):
