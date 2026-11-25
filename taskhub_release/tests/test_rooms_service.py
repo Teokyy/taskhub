@@ -105,7 +105,7 @@ class RoomServiceTests(unittest.TestCase):
 
     def test_initial_mode_selection_cannot_bypass_submitted_customer_task(self):
         self.conn.execute(
-            "INSERT INTO tasks VALUES(1,?,?,2,'submitted')", (self.room, 1)
+            "INSERT INTO tasks VALUES(1,?,?,1,'submitted')", (self.room, 2)
         )
         with self.assertRaises(RoomError):
             set_work_mode(self.conn, self.room, 1, "executor")
