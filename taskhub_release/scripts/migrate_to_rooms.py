@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 REQUIRED_TABLES = {
     "users", "projects", "stages", "tours", "tasks", "submissions",
     "ledger", "audit", "task_criteria", "criterion_results", "disputes", "payouts",
@@ -61,6 +61,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
         moderation_enabled INTEGER NOT NULL DEFAULT 1 CHECK(moderation_enabled IN (0,1)),
         budget_limit_kop INTEGER CHECK(budget_limit_kop IS NULL OR budget_limit_kop>=0),
         budget_reserved_kop INTEGER NOT NULL DEFAULT 0 CHECK(budget_reserved_kop>=0),
+        budget_spent_kop INTEGER NOT NULL DEFAULT 0 CHECK(budget_spent_kop>=0),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         archived_at TEXT
     );
@@ -155,7 +156,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
     # Additive columns retain existing IDs and records. Nullable room_id permits
     # the transaction to create the legacy room and backfill all rows safely.
     additions = {
-        "rooms": ("budget_limit_kop INTEGER", "budget_reserved_kop INTEGER NOT NULL DEFAULT 0"),
+        "rooms": ("budget_limit_kop INTEGER", "budget_reserved_kop INTEGER NOT NULL DEFAULT 0", "budget_spent_kop INTEGER NOT NULL DEFAULT 0"),
         "projects": ("room_id INTEGER REFERENCES rooms(id)",),
         "stages": ("room_id INTEGER REFERENCES rooms(id)",),
         "tours": ("room_id INTEGER REFERENCES rooms(id)",),
