@@ -162,7 +162,7 @@ class MarketplaceMvpTests(unittest.TestCase):
             headers=self.headers("customer"),
             json={"category_ids": ids[:21]},
         )
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 422)
         saved = self.client.put(
             "/api/market/subscriptions",
             headers=self.headers("customer"),
