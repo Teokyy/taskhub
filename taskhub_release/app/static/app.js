@@ -3,7 +3,7 @@ tg?.ready();tg?.expand();
 const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
-let me=null,tab='room',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
+let me=null,tab='exchange',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
@@ -132,7 +132,7 @@ async function render(){
   view.innerHTML='<section class="hello"><h1>Профиль</h1><p>Единый аккаунт TaskHub — не зависит от выбранной комнаты.</p></section><div class="panel muted">Загружаем профиль…</div>';
   let profile;try{profile=await api('/market/profile')}catch(e){if(renderToken===renderSequence)view.innerHTML=empty('Не удалось загрузить профиль',e.message,'<button class="btn secondary" onclick="render()">Повторить</button>');return}
   if(renderToken!==renderSequence)return;
-  me=profile;const mine=profile.tasks||[];
+  me=profile;const mine=(profile.tasks||[]).filter(t=>t.room_id===null||t.room_id===undefined);
   const counts={in_progress:0,submitted:0,revision:0,accepted:0,rejected:0,not_completed:0};
   mine.forEach(t=>{if(t.assignee_id===me.user.id&&Object.prototype.hasOwnProperty.call(counts,t.status))counts[t.status]++});
   view.innerHTML='<section class="profile-row" style="margin:8px 2px 18px"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div style="min-width:0;flex:1"><div class="profile-name">'+esc(me.user.first_name||'Участник')+'</div><div class="muted">Пользователь TaskHub</div></div></section><section class="panel balance-card"><div class="task-top"><div><div class="eyebrow">МОЙ БАЛАНС</div><div style="font-size:25px;font-weight:850;margin-top:4px">'+rub(me.balance_kop||0)+'</div></div><button class="btn secondary" id="profile-finance">История</button></div></section><div class="section-head"><h2>Мои задачи</h2><span>'+mine.filter(t=>t.assignee_id===me.user.id).length+' ВСЕГО</span></div><div class="stats"><div class="stat"><small>В работе</small><strong>'+counts.in_progress+'</strong></div><div class="stat"><small>На проверке</small><strong>'+counts.submitted+'</strong></div><div class="stat"><small>На доработке</small><strong>'+counts.revision+'</strong></div><div class="stat"><small>Принято</small><strong>'+counts.accepted+'</strong></div></div><div class="section-head"><h2>Мои задания как заказчика</h2><span>'+mine.filter(t=>t.created_by===me.user.id).length+'</span></div><div id="my-market-tasks">'+(mine.filter(t=>t.created_by===me.user.id).length?mine.filter(t=>t.created_by===me.user.id).map(t=>taskCard(t)).join(''):empty('Ты ещё не размещал задания','Опубликуй первое задание на общей бирже.'))+'</div><div class="section-head"><h2>Команды</h2></div><section class="panel"><p class="muted">'+(rooms.length?'Состоишь в '+rooms.length+' комнатах. Командные настройки доступны отдельно.':'Ты не состоишь в командах. Это никак не ограничивает биржу.')+'</p><button class="btn secondary block" id="profile-rooms">Открыть комнаты</button></section>';
