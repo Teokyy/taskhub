@@ -110,6 +110,20 @@ class RoomServiceTests(unittest.TestCase):
         with self.assertRaises(RoomError):
             set_work_mode(self.conn, self.room, 1, "executor")
 
+    def test_initial_executor_mode_is_allowed_to_resolve_assigned_task(self):
+        self.conn.execute(
+            "INSERT INTO tasks VALUES(1,?,?,1,'in_progress')", (self.room, 2)
+        )
+        result = set_work_mode(self.conn, self.room, 2, "executor")
+        self.assertEqual(result["work_mode"], "executor")
+
+    def test_initial_customer_mode_is_allowed_to_review_own_submission(self):
+        self.conn.execute(
+            "INSERT INTO tasks VALUES(1,?,?,1,'submitted')", (self.room, 2)
+        )
+        result = set_work_mode(self.conn, self.room, 1, "customer")
+        self.assertEqual(result["work_mode"], "customer")
+
     def test_mode_guard(self):
         with self.assertRaises(RoomError):
             require_mode(self.conn, self.room, 2, "customer")
