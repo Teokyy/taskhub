@@ -31,8 +31,8 @@ class RoomBudgetTests(unittest.TestCase):
             INSERT INTO projects(id,room_id,budget_kop) VALUES(20,1,10000);
             INSERT INTO stages(id,room_id,project_id,budget_kop) VALUES(30,1,20,5000);
             INSERT INTO tasks(id,room_id) VALUES(10,1),(11,1),(12,2);
-            INSERT INTO tasks(id,room_id,project_id) VALUES(13,1,20);
-            INSERT INTO tasks(id,room_id,project_id,stage_id) VALUES(14,1,20,30);
+            INSERT INTO tasks(id,room_id,project_id) VALUES(13,1,20),(15,1,20);
+            INSERT INTO tasks(id,room_id,project_id,stage_id) VALUES(14,1,20,30),(16,1,20,30);
         """)
 
     def tearDown(self):
@@ -82,14 +82,14 @@ class RoomBudgetTests(unittest.TestCase):
         project = self.conn.execute("SELECT * FROM projects WHERE id=20").fetchone()
         self.assertEqual(project["budget_reserved_kop"], 4000)
         with self.assertRaises(RoomError):
-            reserve_task(self.conn, 1, 13, 1000, 5)
+            reserve_task(self.conn, 1, 15, 1500, 5)
 
     def test_stage_tasks_consume_stage_budget_and_spend(self):
         reserve_task(self.conn, 1, 14, 4000, 5)
         stage = self.conn.execute("SELECT * FROM stages WHERE id=30").fetchone()
         self.assertEqual(stage["budget_reserved_kop"], 4000)
         with self.assertRaises(RoomError):
-            reserve_task(self.conn, 1, 14, 2000, 5)
+            reserve_task(self.conn, 1, 16, 2000, 5)
         release_task(self.conn, 1, 14, 5, "spent")
         stage = self.conn.execute("SELECT * FROM stages WHERE id=30").fetchone()
         self.assertEqual(stage["budget_reserved_kop"], 0)
