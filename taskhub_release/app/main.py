@@ -1615,17 +1615,21 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
 
 
 @app.delete("/api/market/tasks/{task_id}")
-def delete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+async def delete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     with connect() as conn:
         task = conn.execute("SELECT * FROM tasks WHERE id=? AND room_id IS NULL AND created_by=?", (task_id, account["id"])).fetchone()
         if not task:
             raise HTTPException(404, "Твоё задание не найдено")
         if task["status"] not in ("open", "available") or task["assignee_id"] is not None:
-            raise HTTPException(409, "Нельзя удалить задание, которое уже взяли в работу или начали выполнять")
+            raise HTTPException(409, "Нельзя отменить задание, которое уже взяли в работу")
+        recipients=conn.execute("SELECT u.telegram_id FROM responses r JOIN users u ON u.id=r.executor_id WHERE r.task_id=? AND r.status='sent'",(task_id,)).fetchall()
         conn.execute("UPDATE tasks SET status='cancelled',updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND status IN ('open','available')", (task_id, account["id"]))
-        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "delete_market_task", "task", task_id, "soft_delete"))
-    return {"ok": True}
+        conn.execute("UPDATE responses SET status='rejected',updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='sent'",(task_id,))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "cancel_market_task", "task", task_id, "customer_cancelled_open_task"))
+    for recipient in recipients:
+        await notify_telegram(recipient["telegram_id"],f"Заказчик отменил задание «{task['title']}». Отклик закрыт.")
+    return {"ok": True, "status":"cancelled"}
 
 
 @app.get("/api/market/notification-preferences")
