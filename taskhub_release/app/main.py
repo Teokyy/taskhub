@@ -142,6 +142,71 @@ class RoomBudgetIn(BaseModel):
     limit_rub: int | None = Field(default=None, ge=0, le=1000000000)
 
 
+class CriterionIn(BaseModel):
+    title: str = Field(min_length=2, max_length=300)
+    weight: int = Field(default=0, ge=0, le=100)
+    critical: bool = False
+
+
+class ProjectIn(BaseModel):
+    title: str = Field(min_length=2, max_length=160)
+    description: str = Field(default="", max_length=10000)
+    budget_rub: int = Field(ge=0, le=100000000)
+
+
+class StageIn(BaseModel):
+    title: str = Field(min_length=2, max_length=160)
+    description: str = Field(default="", max_length=10000)
+    budget_rub: int = Field(ge=0, le=100000000)
+
+
+class TaskIn(BaseModel):
+    title: str = Field(min_length=2, max_length=120)
+    description: str = Field(default="", max_length=10000)
+    category: str = Field(default="Другое", min_length=1, max_length=60)
+    reward_rub: int | None = Field(default=None, ge=0, le=1000000)
+    pricing_model: str = Field(default="fixed")
+    norm_minutes: int = Field(default=0, ge=0, le=100000)
+    difficulty: float = Field(default=1.0)
+    urgency: float = Field(default=1.0)
+    project_id: int | None = None
+    stage_id: int | None = None
+    tour_id: int | None = None
+    deadline: str | None = Field(default=None, max_length=40)
+    criteria: list[CriterionIn] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_pricing(self):
+        if self.pricing_model not in {"fixed", "normative"}:
+            raise ValueError("Модель оплаты: fixed или normative")
+        if self.difficulty not in DIFFICULTY_FACTORS:
+            raise ValueError("Недопустимый коэффициент сложности")
+        if self.urgency not in URGENCY_FACTORS:
+            raise ValueError("Недопустимый коэффициент срочности")
+        if self.pricing_model == "normative" and self.norm_minutes <= 0:
+            raise ValueError("Для нормативной оплаты укажи нормативное время")
+        if self.pricing_model == "fixed" and self.reward_rub is None:
+            raise ValueError("Для фиксированной оплаты укажи сумму")
+        if self.criteria:
+            total = sum(item.weight for item in self.criteria)
+            if total not in (0, 100):
+                raise ValueError("Вес критериев должен составлять 100% или 0% для неделимой задачи")
+        return self
+
+
+class SubmitIn(BaseModel):
+    body: str = Field(min_length=1, max_length=10000)
+
+
+class ReviewIn(BaseModel):
+    decision: str = Field(min_length=1, max_length=20)
+    comment: str = Field(default="", max_length=2000)
+    quality: str = Field(default="good")
+
+class ModerationIn(BaseModel):
+    decision: str = Field(pattern="^(approve|reject)$")
+    comment: str = Field(default="",max_length=2000)
+
 def ensure_rooms_schema(conn):
     required = {"rooms", "room_members", "room_payout_settings"}
     found = {row["name"] for row in conn.execute(
@@ -689,68 +754,6 @@ def put_room_mode(room_id: int, data: RoomModeIn,
             room_error(error)
 
 
-class CriterionIn(BaseModel):
-    title: str = Field(min_length=2, max_length=300)
-    weight: int = Field(default=0, ge=0, le=100)
-    critical: bool = False
-
-
-class ProjectIn(BaseModel):
-    title: str = Field(min_length=2, max_length=160)
-    description: str = Field(default="", max_length=10000)
-    budget_rub: int = Field(ge=0, le=100000000)
-
-
-class StageIn(BaseModel):
-    title: str = Field(min_length=2, max_length=160)
-    description: str = Field(default="", max_length=10000)
-    budget_rub: int = Field(ge=0, le=100000000)
-
-
-class TaskIn(BaseModel):
-    title: str = Field(min_length=2, max_length=120)
-    description: str = Field(default="", max_length=10000)
-    category: str = Field(default="Другое", min_length=1, max_length=60)
-    reward_rub: int | None = Field(default=None, ge=0, le=1000000)
-    pricing_model: str = Field(default="fixed")
-    norm_minutes: int = Field(default=0, ge=0, le=100000)
-    difficulty: float = Field(default=1.0)
-    urgency: float = Field(default=1.0)
-    project_id: int | None = None
-    stage_id: int | None = None
-    tour_id: int | None = None
-    deadline: str | None = Field(default=None, max_length=40)
-    criteria: list[CriterionIn] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_pricing(self):
-        if self.pricing_model not in {"fixed", "normative"}:
-            raise ValueError("Модель оплаты: fixed или normative")
-        if self.difficulty not in DIFFICULTY_FACTORS:
-            raise ValueError("Недопустимый коэффициент сложности")
-        if self.urgency not in URGENCY_FACTORS:
-            raise ValueError("Недопустимый коэффициент срочности")
-        if self.pricing_model == "normative" and self.norm_minutes <= 0:
-            raise ValueError("Для нормативной оплаты укажи нормативное время")
-        if self.pricing_model == "fixed" and self.reward_rub is None:
-            raise ValueError("Для фиксированной оплаты укажи сумму")
-        if self.criteria:
-            total = sum(item.weight for item in self.criteria)
-            if total not in (0, 100):
-                raise ValueError("Вес критериев должен составлять 100% или 0% для неделимой задачи")
-        return self
-
-
-class SubmitIn(BaseModel):
-    body: str = Field(min_length=1, max_length=10000)
-
-
-class ReviewIn(BaseModel):
-    decision: str = Field(min_length=1, max_length=20)
-    comment: str = Field(default="", max_length=2000)
-    quality: str = Field(default="good")
-
-
 def current_user(init_data: str):
     token = getenv("BOT_TOKEN", "").strip()
     telegram_user = verify_telegram_init_data(init_data, token)
@@ -980,11 +983,6 @@ def moderation_queue(x_telegram_init_data:str=Header(default="",alias="X-Telegra
             FROM tasks t LEFT JOIN users u ON u.id=t.created_by
             WHERE t.moderation_status='pending' ORDER BY t.created_at""").fetchall()
     return [dict(row) for row in rows]
-
-
-class ModerationIn(BaseModel):
-    decision: str = Field(pattern="^(approve|reject)$")
-    comment: str = Field(default="",max_length=2000)
 
 
 @app.post("/api/tasks/{task_id}/moderate")
