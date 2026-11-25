@@ -1,13 +1,35 @@
-# TaskHub MVP
+# TaskHub — marketplace MVP (pre-alpha)
 
-Рабочий MVP: Telegram WebApp auth, задачи, захват задачи, сдача, проверка администратором, начисление внутреннего баланса.
+TaskHub is being rebuilt around a public task marketplace. This repository is in **pre-alpha**; do not treat the current deployment as a stable beta.
 
-## Railway
-- Root Directory: `/` (если репозиторий содержит эти файлы в корне)
+## Product flow
+- Customer publishes a task in a two-level category.
+- Executors send responses; a customer accepts one response.
+- Acceptance creates a private chat for the two deal participants.
+- Customer confirms completion; both parties can leave one review.
+- Either party can open a dispute; moderators can inspect the full conversation.
+- Category subscriptions and deal notifications are delivered through the Telegram bot.
+
+## Payments
+The customer and executor settle directly. TaskHub does not hold funds, escrow, or process payouts in this MVP.
+
+## Out of scope
+Provider service catalog, repeatable services/tasks, escrow, internal marketplace payouts, chat attachments, and weighted reputation.
+
+## Railway deployment
 - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
-- Variables: `BOT_TOKEN`, `PUBLIC_URL` (домен Railway с https), `ADMIN_TELEGRAM_IDS` (Telegram ID администратора), `DEV_MODE=false`.
-- Подключить Railway Volume к `/data` для сохранения SQLite. Без Volume база может потеряться при пересоздании контейнера.
-- Бот запускается в том же сервисе через polling, когда заданы BOT_TOKEN и PUBLIC_URL. Для одного экземпляра.
+- Required variables: `BOT_TOKEN`, `PUBLIC_URL` (HTTPS URL), `ADMIN_TELEGRAM_IDS`.
+- Optional: `MODERATOR_TELEGRAM_IDS` (comma-separated Telegram IDs), `DEV_MODE=false`.
+- Attach a Railway Volume at `/data` to persist SQLite.
+- The bot runs in the same service via polling when `BOT_TOKEN` and `PUBLIC_URL` are configured. Run one app instance for polling and the hourly digest worker.
 
-## Важно
-Открывать Mini App через кнопку Telegram-бота. Прямое открытие домена в браузере без Telegram initData не авторизует пользователя.
+## Local checks
+From `taskhub_release`:
+- `python -m compileall -q app`
+- `python -m unittest discover -s tests -v`
+- `node --check app/static/app.js`
+
+## Important
+Open the Mini App through the Telegram bot so Telegram initData can be verified. Directly opening the domain in a normal browser does not authenticate a user.
+
+A feature is not considered complete just because its API route or UI button exists. It must pass end-to-end tests with separate customer, executor, and moderator accounts.
