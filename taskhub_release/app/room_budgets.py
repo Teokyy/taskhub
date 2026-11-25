@@ -53,6 +53,7 @@ def _task_scope(conn: sqlite3.Connection, room_id: int, task_id: int):
     keys = set(task.keys()) if hasattr(task, "keys") else set()
     project_id = task["project_id"] if "project_id" in keys else None
     stage_id = task["stage_id"] if "stage_id" in keys else None
+    stage = None
     if stage_id is not None:
         stage = conn.execute(
             "SELECT * FROM stages WHERE id=? AND room_id=?", (stage_id, room_id)
