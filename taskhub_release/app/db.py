@@ -320,6 +320,10 @@ def init_db():
 
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS user_presence(
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                last_seen TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS digest_windows(
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 window_start TEXT NOT NULL,
