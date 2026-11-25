@@ -86,6 +86,44 @@ async def notify_telegram(telegram_id: int | None, message: str):
         log.exception("TELEGRAM_NOTIFICATION_FAILED recipient=%s", telegram_id)
 
 
+async def category_digest_worker():
+    """Send one deduplicated Telegram digest per subscribed user per UTC hour."""
+    while True:
+        now=datetime.now(timezone.utc)
+        if now.minute == 0:
+            window_start=now.strftime("%Y-%m-%d %H:00:00")
+            with connect() as conn:
+                subscribers=conn.execute("""SELECT DISTINCT u.id user_id,u.telegram_id
+                    FROM users u JOIN subscriptions s ON s.user_id=u.id""").fetchall()
+                batches=[]
+                for subscriber in subscribers:
+                    category_ids=[x["category_id"] for x in conn.execute(
+                        "SELECT category_id FROM subscriptions WHERE user_id=?",(subscriber["user_id"],)
+                    ).fetchall()]
+                    if not category_ids: continue
+                    marks=",".join("?" for _ in category_ids)
+                    rows=conn.execute(f"""SELECT t.id,t.title,t.category FROM tasks t
+                        JOIN categories c ON c.id=t.category_id
+                        WHERE t.room_id IS NULL AND t.status IN ('open','available')
+                          AND t.created_at>=? AND (c.id IN ({marks}) OR c.parent_id IN ({marks}))
+                        ORDER BY t.created_at DESC LIMIT 30""",
+                        [window_start,*category_ids,*category_ids]).fetchall()
+                    if not rows: continue
+                    cur=conn.execute("INSERT OR IGNORE INTO digest_windows(user_id,window_start) VALUES(?,?)",
+                                     (subscriber["user_id"],window_start))
+                    if cur.rowcount:
+                        batches.append((subscriber["user_id"],subscriber["telegram_id"],[dict(x) for x in rows]))
+            for user_id,telegram_id,rows in batches:
+                lines=[f"• {x['title']} — {x['category']}" for x in rows[:15]]
+                message="🆕 Новые задания по твоим подпискам:\n"+"\n".join(lines)
+                if len(rows)>15: message+=f"\nИ ещё {len(rows)-15} заданий."
+                await notify_telegram(telegram_id,message)
+                with connect() as conn:
+                    conn.execute("UPDATE digest_windows SET sent_at=CURRENT_TIMESTAMP WHERE user_id=? AND window_start=?",
+                                 (user_id,window_start))
+        await asyncio.sleep(20)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _bot_task, _bot, _bot_status
@@ -99,11 +137,17 @@ async def lifespan(app: FastAPI):
         _bot_status = "error"
         log.exception("TASKHUB_TELEGRAM_STARTUP_ERROR")
     expiry_task = asyncio.create_task(expire_overdue_tasks(), name="task-deadline-expiry")
+    digest_task = asyncio.create_task(category_digest_worker(), name="category-hourly-digest")
     log.info("TASKHUB_API_STARTED bot_status=%s", _bot_status)
     try:
         yield
     finally:
         expiry_task.cancel()
+        digest_task.cancel()
+        try:
+            await digest_task
+        except asyncio.CancelledError:
+            pass
         try:
             await expiry_task
         except asyncio.CancelledError:
