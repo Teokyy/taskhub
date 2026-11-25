@@ -13,7 +13,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Compile application and migration utilities
-        run: python -m py_compile taskhub_release/app/main.py taskhub_release/app/rooms.py taskhub_release/app/room_task_actions.py taskhub_release/app/task_refusal.py taskhub_release/scripts/backup_sqlite.py taskhub_release/scripts/migrate_to_rooms.py
+        run: python -m py_compile taskhub_release/app/main.py taskhub_release/app/rooms.py taskhub_release/app/room_task_actions.py taskhub_release/app/task_refusal.py taskhub_release/app/room_budgets.py taskhub_release/scripts/backup_sqlite.py taskhub_release/scripts/migrate_to_rooms.py
       - name: Run migration tests
         run: python -m unittest discover -s taskhub_release/tests -v
 
