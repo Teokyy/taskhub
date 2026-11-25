@@ -87,6 +87,12 @@ class MarketplaceMvpTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         response_id = response.json()["id"]
+        second_response = self.client.post(
+            f"/api/market/tasks/{task_id}/responses",
+            headers=self.headers("outsider"),
+            json={"message": "I can also do it"},
+        )
+        self.assertEqual(second_response.status_code, 200, second_response.text)
 
         duplicate = self.client.post(
             f"/api/market/tasks/{task_id}/responses",
@@ -101,6 +107,14 @@ class MarketplaceMvpTests(unittest.TestCase):
         )
         self.assertEqual(accepted.status_code, 200, accepted.text)
         chat_id = accepted.json()["chat_id"]
+        second_accept = self.client.post(
+            f"/api/market/responses/{second_response.json()['id']}/accept",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(second_accept.status_code, 409)
+        with db.connect() as conn:
+            chat_count = conn.execute("SELECT COUNT(*) n FROM chats WHERE response_id IN (SELECT id FROM responses WHERE task_id=?)", (task_id,)).fetchone()["n"]
+        self.assertEqual(chat_count, 1)
 
         forbidden = self.client.get(
             f"/api/market/chats/{chat_id}/messages",
