@@ -99,6 +99,29 @@ class RoomBudgetTests(unittest.TestCase):
         self.assertEqual(stage["budget_reserved_kop"], 0)
         self.assertEqual(stage["budget_spent_kop"], 4000)
 
+    def test_quality_bonus_is_charged_to_room_budget(self):
+        reserve_task(self.conn, 1, 10, 7000, 5)
+        release_task(self.conn, 1, 10, 5, "spent", 8000)
+        self.assertEqual(get_budget(self.conn, 1)["spent_kop"], 8000)
+
+    def test_quality_bonus_cannot_exceed_room_budget(self):
+        reserve_task(self.conn, 1, 10, 7000, 5)
+        with self.assertRaises(RoomError):
+            release_task(self.conn, 1, 10, 5, "spent", 11000)
+        self.assertEqual(get_budget(self.conn, 1)["reserved_kop"], 7000)
+
+    def test_actual_project_payout_must_fit_project_cap(self):
+        reserve_task(self.conn, 1, 13, 4000, 5)
+        with self.assertRaises(RoomError):
+            release_task(self.conn, 1, 13, 5, "spent", 6000)
+        self.assertEqual(self.conn.execute("SELECT budget_reserved_kop FROM projects WHERE id=20").fetchone()[0], 4000)
+
+    def test_stage_actual_payout_updates_real_spend(self):
+        reserve_task(self.conn, 1, 14, 4000, 5)
+        release_task(self.conn, 1, 14, 5, "spent", 4500)
+        stage = self.conn.execute("SELECT budget_reserved_kop,budget_spent_kop FROM stages WHERE id=30").fetchone()
+        self.assertEqual(tuple(stage), (0, 4500))
+
     def test_stage_must_belong_to_project_in_same_room(self):
         self.conn.execute("INSERT INTO projects(id,room_id,budget_kop) VALUES(21,2,5000)")
         self.conn.execute("INSERT INTO stages(id,room_id,project_id,budget_kop) VALUES(31,2,21,3000)")
