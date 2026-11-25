@@ -1693,6 +1693,73 @@ async def accept_market_response(response_id: int, x_telegram_init_data: str = H
     return {"ok":True,"chat_id":chat_id,"status":"in_progress"}
 
 
+
+@app.get("/api/market/responses/mine")
+def my_market_responses(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        rows=conn.execute("""SELECT r.*,t.title,t.category,t.reward_kop,t.status task_status,t.created_by,
+            owner.first_name customer_name FROM responses r JOIN tasks t ON t.id=r.task_id
+            JOIN users owner ON owner.id=t.created_by WHERE r.executor_id=? ORDER BY r.created_at DESC""",(account["id"],)).fetchall()
+    return [dict(x) for x in rows]
+
+
+@app.post("/api/market/responses/{response_id}/release")
+async def release_accepted_market_response(response_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        row=conn.execute("""SELECT r.*,t.id task_id,t.title,t.created_by,t.status task_status,
+            owner.telegram_id owner_telegram_id FROM responses r JOIN tasks t ON t.id=r.task_id
+            JOIN users owner ON owner.id=t.created_by WHERE r.id=? AND r.executor_id=?""",(response_id,account["id"])).fetchone()
+        if not row or row["status"]!="accepted" or row["task_status"]!="in_progress":
+            raise HTTPException(409,"Эту сделку нельзя отменить со стороны исполнителя")
+        conn.execute("UPDATE responses SET status='withdrawn',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='accepted'",(response_id,))
+        conn.execute("UPDATE tasks SET status='open',assignee_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='in_progress'",(row["task_id"],))
+        conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id=?",(response_id,))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"executor_release_deal","task",row["task_id"],"withdraw_without_penalty"))
+    await notify_telegram(row["owner_telegram_id"],f"Исполнитель отказался от задания «{row['title']}». Задание снова открыто для откликов.")
+    return {"ok":True,"status":"open"}
+
+
+@app.post("/api/market/messages/{message_id}/hide")
+def hide_market_message(message_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        row=conn.execute("""SELECT m.id,t.created_by,r.executor_id FROM messages m
+            JOIN chats c ON c.id=m.chat_id JOIN responses r ON r.id=c.response_id
+            JOIN tasks t ON t.id=r.task_id WHERE m.id=?""",(message_id,)).fetchone()
+        if not row or int(account["id"]) not in (int(row["created_by"]),int(row["executor_id"])):
+            raise HTTPException(404,"Сообщение не найдено")
+        conn.execute("UPDATE messages SET hidden_for_user_id=? WHERE id=?",(account["id"],message_id))
+    return {"ok":True}
+
+
+@app.get("/api/moderation/disputes")
+def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data);admin(account)
+    with connect() as conn:
+        rows=conn.execute("""SELECT d.*,t.title,t.status task_status,
+            opener.first_name opened_by_name,customer.first_name customer_name,executor.first_name executor_name
+            FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users opener ON opener.id=d.user_id
+            JOIN users customer ON customer.id=t.created_by
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN users executor ON executor.id=r.executor_id
+            WHERE d.status='open' ORDER BY d.created_at""").fetchall()
+    return [dict(x) for x in rows]
+
+
+@app.get("/api/moderation/disputes/{dispute_id}/chat")
+def moderator_dispute_chat(dispute_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data);admin(account)
+    with connect() as conn:
+        dispute=conn.execute("SELECT task_id FROM disputes WHERE id=?",(dispute_id,)).fetchone()
+        if not dispute: raise HTTPException(404,"Жалоба не найдена")
+        rows=conn.execute("""SELECT m.*,u.first_name sender_name FROM messages m
+            JOIN chats c ON c.id=m.chat_id JOIN responses r ON r.id=c.response_id
+            JOIN users u ON u.id=m.sender_id WHERE r.task_id=? ORDER BY m.id""",(dispute["task_id"],)).fetchall()
+    return [dict(x) for x in rows]
+
+
 @app.get("/api/market/chats")
 def list_market_chats(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
