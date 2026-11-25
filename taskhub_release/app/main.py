@@ -1330,9 +1330,11 @@ def create_category(data: CategoryCreateIn, x_telegram_init_data: str = Header(d
     name=data.name.strip()
     with connect() as conn:
         if data.parent_id is not None:
-            parent=conn.execute("SELECT id,parent_id FROM categories WHERE id=?", (data.parent_id,)).fetchone()
-            if not parent or parent["parent_id"] is not None:
+            parent=conn.execute("SELECT id,parent_id,is_hidden FROM categories WHERE id=?", (data.parent_id,)).fetchone()
+            if not parent or parent["parent_id"] is not None or parent["is_hidden"]:
                 raise HTTPException(400,"Подкатегория должна принадлежать корневой категории")
+        if conn.execute("SELECT 1 FROM categories WHERE name=? AND parent_id IS NULL",(name,)).fetchone() if data.parent_id is None else conn.execute("SELECT 1 FROM categories WHERE name=? AND parent_id=?",(name,data.parent_id)).fetchone():
+            raise HTTPException(409,"Такая категория уже существует")
         try:
             cur=conn.execute("INSERT INTO categories(name,parent_id) VALUES(?,?)",(name,data.parent_id))
         except Exception as exc:
@@ -1351,8 +1353,8 @@ def update_category(category_id: int, data: CategoryUpdateIn, x_telegram_init_da
         if not category: raise HTTPException(404,"Категория не найдена")
         new_parent=category["parent_id"] if data.parent_id is None else data.parent_id
         if new_parent is not None:
-            parent=conn.execute("SELECT id,parent_id FROM categories WHERE id=?",(new_parent,)).fetchone()
-            if not parent or parent["parent_id"] is not None or new_parent==category_id:
+            parent=conn.execute("SELECT id,parent_id,is_hidden FROM categories WHERE id=?",(new_parent,)).fetchone()
+            if not parent or parent["parent_id"] is not None or parent["is_hidden"] or new_parent==category_id:
                 raise HTTPException(400,"Допустим только перенос под корневую категорию")
         if category["parent_id"] is None and conn.execute("SELECT 1 FROM categories WHERE parent_id=? LIMIT 1",(category_id,)).fetchone() and data.parent_id is not None:
             raise HTTPException(409,"Сначала перенеси или скрой подкатегории")
@@ -1363,6 +1365,13 @@ def update_category(category_id: int, data: CategoryUpdateIn, x_telegram_init_da
         except Exception as exc:
             if "UNIQUE" in str(exc): raise HTTPException(409,"В этой ветке уже есть такая категория")
             raise
+        if new_parent is None:
+            children=conn.execute("SELECT id,name FROM categories WHERE parent_id=?",(category_id,)).fetchall()
+            for child in children:
+                conn.execute("UPDATE tasks SET category=? WHERE category_id=?",(name+" / "+child["name"],child["id"]))
+        else:
+            parent_name=conn.execute("SELECT name FROM categories WHERE id=?",(new_parent,)).fetchone()["name"]
+            conn.execute("UPDATE tasks SET category=? WHERE category_id=?",(parent_name+" / "+name,category_id))
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
                      (account["id"],"update_category","category",category_id,f"name={name};parent_id={new_parent};is_hidden={hidden}"))
         return dict(conn.execute("SELECT * FROM categories WHERE id=?",(category_id,)).fetchone())
