@@ -132,6 +132,13 @@ async def start_bot():
             row=conn.execute("SELECT onboarding_step,onboarding_completed_at FROM users WHERE telegram_id=?",(telegram_user.id,)).fetchone()
         if row["onboarding_completed_at"]:
             await open_app(message,"С возвращением в TaskHub! Открой приложение или выбери команду бота.")
+        elif row["onboarding_step"]==1:
+            keyboard=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🧾 Ищу исполнителя",callback_data="quest:role:customer")],
+                [InlineKeyboardButton(text="💼 Ищу работу",callback_data="quest:role:executor")],
+                [InlineKeyboardButton(text="🔁 И то, и другое",callback_data="quest:role:both")]
+            ])
+            await message.answer("Шаг 1 из 3 — кем ты будешь чаще?",reply_markup=keyboard)
         elif row["onboarding_step"]==2:
             await show_category_step(message)
         elif row["onboarding_step"]==3:
