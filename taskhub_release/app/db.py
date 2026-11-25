@@ -305,6 +305,7 @@ def init_db():
         _add_column(conn, "tasks", "dispute_status TEXT")
         _add_column(conn, "tasks", "completed_at TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category_status_created ON tasks(category_id,status,created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_market_tasks_feed ON tasks(room_id,status,id DESC)")
 
         # Seed the two-level launch taxonomy idempotently.
         category_tree = {
