@@ -177,6 +177,23 @@ async def start_bot():
     async def menu_command(message: Message):
         await open_app(message,"Меню TaskHub:")
 
+    @dp.callback_query(F.data.startswith("sub:off:"))
+    async def unsubscribe_category(callback: CallbackQuery):
+        parts=callback.data.split(":")
+        if len(parts)!=3 or not parts[2].isdigit():
+            await callback.answer("Некорректная категория",show_alert=True)
+            return
+        category_id=int(parts[2])
+        with connect() as conn:
+            account=conn.execute("SELECT id FROM users WHERE telegram_id=?",(callback.from_user.id,)).fetchone()
+            if account:
+                conn.execute("DELETE FROM subscriptions WHERE user_id=? AND category_id=?",(account["id"],category_id))
+                category=conn.execute("SELECT name FROM categories WHERE id=?",(category_id,)).fetchone()
+            else:
+                category=None
+        await callback.answer("Подписка отключена")
+        await callback.message.answer("🔕 Подписка отключена: "+(category["name"] if category else "категория"))
+
     @dp.callback_query(F.data.startswith("quest:"))
     async def quest_callback(callback: CallbackQuery):
         action=callback.data.split(":")
