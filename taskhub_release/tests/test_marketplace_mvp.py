@@ -154,6 +154,52 @@ class MarketplaceMvpTests(unittest.TestCase):
             history_count = conn.execute("SELECT COUNT(*) n FROM task_history WHERE task_id=?", (task_id,)).fetchone()["n"]
         self.assertGreater(history_count, 0)
 
+
+    def test_post_selection_edit_allows_description_but_locks_title_and_reward(self):
+        task_id = self.create_task()
+        response = self.client.post(
+            f"/api/market/tasks/{task_id}/responses",
+            headers=self.headers("executor"),
+            json={"message": "I can do it"},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        accepted = self.client.post(
+            f"/api/market/responses/{response.json()['id']}/accept",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(accepted.status_code, 200, accepted.text)
+        tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
+        smm_id = next(x["id"] for p in tree if p["name"] == "Маркетинг" for x in p["children"] if x["name"] == "SMM")
+        base = {
+            "title": "Prepare SMM plan",
+            "description": "Clarified requirements",
+            "category_id": smm_id,
+            "category": "Маркетинг / SMM",
+            "reward_rub": 1500,
+            "pricing_model": "fixed",
+            "deadline": "2026-12-10",
+        }
+        edited = self.client.put(
+            f"/api/market/tasks/{task_id}",
+            headers=self.headers("customer"),
+            json=base,
+        )
+        self.assertEqual(edited.status_code, 200, edited.text)
+        changed_reward = dict(base, reward_rub=1700)
+        locked = self.client.put(
+            f"/api/market/tasks/{task_id}",
+            headers=self.headers("customer"),
+            json=changed_reward,
+        )
+        self.assertEqual(locked.status_code, 409)
+        changed_title = dict(base, title="A different task")
+        locked_title = self.client.put(
+            f"/api/market/tasks/{task_id}",
+            headers=self.headers("customer"),
+            json=changed_title,
+        )
+        self.assertEqual(locked_title.status_code, 409)
+
     def test_subscriptions_are_limited_to_twenty(self):
         tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
         ids = [child["id"] for parent in tree for child in parent["children"]]
