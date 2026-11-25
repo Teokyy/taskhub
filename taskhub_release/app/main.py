@@ -161,6 +161,135 @@ def room_tasks(room_id: int, status: str = "available",
         return [dict(row) for row in rows]
 
 
+@app.get("/api/rooms/{room_id}/projects")
+def room_projects(room_id: int,
+                 x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_member(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        rows = conn.execute(
+            """SELECT p.*,
+                      COALESCE((SELECT SUM(s.budget_kop) FROM stages s
+                                WHERE s.project_id=p.id AND s.room_id=p.room_id),0) stages_budget_kop,
+                      COALESCE((SELECT SUM(t.reward_kop) FROM tasks t
+                                WHERE t.project_id=p.id AND t.room_id=p.room_id
+                                  AND t.status='accepted'),0) accrued_kop
+               FROM projects p WHERE p.room_id=? ORDER BY p.id DESC""",
+            (room_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.post("/api/rooms/{room_id}/projects")
+def create_room_project(room_id: int, data: ProjectIn,
+                        x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        cur = conn.execute(
+            """INSERT INTO projects(title,description,budget_kop,created_by,room_id)
+               VALUES(?,?,?,?,?)""",
+            (data.title.strip(), data.description.strip(), data.budget_rub * 100,
+             account["id"], room_id),
+        )
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "create", "project", cur.lastrowid, f"room_id={room_id}"),
+        )
+        return dict(conn.execute("SELECT * FROM projects WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+@app.get("/api/rooms/{room_id}/projects/{project_id}/stages")
+def room_project_stages(room_id: int, project_id: int,
+                        x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_member(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        project = conn.execute(
+            "SELECT id FROM projects WHERE id=? AND room_id=?", (project_id, room_id)
+        ).fetchone()
+        if not project:
+            raise HTTPException(404, "Проект не найден в этой комнате")
+        rows = conn.execute(
+            "SELECT * FROM stages WHERE project_id=? AND room_id=? ORDER BY position,id",
+            (project_id, room_id),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.post("/api/rooms/{room_id}/projects/{project_id}/stages")
+def create_room_stage(room_id: int, project_id: int, data: StageIn,
+                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        project = conn.execute(
+            "SELECT * FROM projects WHERE id=? AND room_id=?", (project_id, room_id)
+        ).fetchone()
+        if not project:
+            raise HTTPException(404, "Проект не найден в этой комнате")
+        allocated = conn.execute(
+            "SELECT COALESCE(SUM(budget_kop),0) n FROM stages WHERE project_id=? AND room_id=?",
+            (project_id, room_id),
+        ).fetchone()["n"]
+        if allocated + data.budget_rub * 100 > project["budget_kop"]:
+            raise HTTPException(409, "Бюджет этапов превышает бюджет проекта")
+        cur = conn.execute(
+            """INSERT INTO stages(project_id,title,description,budget_kop,room_id)
+               VALUES(?,?,?,?,?)""",
+            (project_id, data.title.strip(), data.description.strip(),
+             data.budget_rub * 100, room_id),
+        )
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "create", "stage", cur.lastrowid, f"room_id={room_id}"),
+        )
+        return dict(conn.execute("SELECT * FROM stages WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+@app.get("/api/rooms/{room_id}/team")
+def room_team(room_id: int,
+              x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        rows = conn.execute(
+            """SELECT u.id,u.telegram_id,u.username,u.first_name,u.photo_url,
+                      rm.member_role,rm.work_mode,
+                      COUNT(CASE WHEN t.status='in_progress' THEN 1 END) active_tasks,
+                      COUNT(CASE WHEN t.status='submitted' THEN 1 END) submitted_tasks,
+                      COALESCE((SELECT SUM(l.amount_kop) FROM ledger l
+                                WHERE l.user_id=u.id AND l.room_id=rm.room_id),0) earned_kop
+               FROM room_members rm JOIN users u ON u.id=rm.user_id
+               LEFT JOIN tasks t ON t.room_id=rm.room_id AND
+                    (t.assignee_id=u.id OR t.created_by=u.id)
+               WHERE rm.room_id=? AND rm.status='active'
+               GROUP BY u.id,rm.room_id ORDER BY u.first_name,u.id""",
+            (room_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
 @app.get("/api/rooms/{room_id}/moderation")
 def room_moderation_queue(room_id: int,
                           x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
