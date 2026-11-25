@@ -212,8 +212,7 @@ async def start_bot():
                 ])
                 await callback.message.answer("Шаг 1 из 3 — кем ты будешь чаще?",reply_markup=keyboard)
             elif action[1]=="skip":
-                conn.execute("DELETE FROM subscriptions WHERE user_id=?",(user_id,))
-                conn.execute("UPDATE users SET role_flags='none',onboarding_step=0 WHERE id=?",(user_id,))
+                conn.execute("UPDATE users SET onboarding_step=0,onboarding_skipped_at=CURRENT_TIMESTAMP WHERE id=?",(user_id,))
                 await callback.message.answer("Квест пропущен. Роли и подписки не создавались. Вернуться можно через /quest.")
             elif action[1]=="role" and len(action)==3 and action[2] in ("customer","executor","both"):
                 conn.execute("UPDATE users SET role_flags=?,onboarding_step=2 WHERE id=?",(action[2],user_id))
