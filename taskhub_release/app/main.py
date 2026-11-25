@@ -250,6 +250,10 @@ class CategoryRequestResolveIn(BaseModel):
     note: str = Field(default="", max_length=1000)
 
 
+class SubscriptionUpdateIn(BaseModel):
+    category_ids: list[int] = Field(default_factory=list, max_length=20)
+
+
 class MarketResponseIn(BaseModel):
     message: str = Field(default="", max_length=1000)
     proposed_deadline: str | None = Field(default=None, max_length=40)
@@ -1324,6 +1328,43 @@ async def resolve_category_request(request_id: int, data: CategoryRequestResolve
                      (account["id"],"resolve_category_request","category_request",request_id,f"{data.status};category_id={data.category_id}"))
     await notify_telegram(row["telegram_id"],f"📂 Решение по твоей заявке на категорию для задания «{row['title']}»: {data.status}. {data.note}".strip())
     return {"ok":True,"status":data.status}
+
+
+
+@app.get("/api/market/subscriptions")
+def get_market_subscriptions(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        rows=conn.execute("""SELECT c.id,c.name,c.parent_id,p.name parent_name FROM subscriptions s
+            JOIN categories c ON c.id=s.category_id LEFT JOIN categories p ON p.id=c.parent_id
+            WHERE s.user_id=? ORDER BY c.parent_id,c.id""",(account["id"],)).fetchall()
+    return [dict(x) for x in rows]
+
+
+@app.put("/api/market/subscriptions")
+def set_market_subscriptions(data: SubscriptionUpdateIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    ids=list(dict.fromkeys(data.category_ids))
+    if len(ids)>20: raise HTTPException(400,"Можно выбрать не более 20 подписок")
+    with connect() as conn:
+        if ids:
+            placeholders=",".join("?" for _ in ids)
+            rows=conn.execute(f"SELECT id,is_hidden FROM categories WHERE id IN ({placeholders})",ids).fetchall()
+            if len(rows)!=len(ids) or any(x["is_hidden"] for x in rows):
+                raise HTTPException(400,"В подписку можно добавить только существующие видимые категории")
+        conn.execute("DELETE FROM subscriptions WHERE user_id=?",(account["id"],))
+        conn.executemany("INSERT INTO subscriptions(user_id,category_id) VALUES(?,?)",[(account["id"],x) for x in ids])
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"],"update_subscriptions","user",account["id"],"category_ids="+",".join(map(str,ids))))
+    return {"ok":True,"category_ids":ids}
+
+
+@app.delete("/api/market/subscriptions/{category_id}")
+def delete_market_subscription(category_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        conn.execute("DELETE FROM subscriptions WHERE user_id=? AND category_id=?",(account["id"],category_id))
+    return {"ok":True}
 
 
 @app.get("/api/market/profile")
