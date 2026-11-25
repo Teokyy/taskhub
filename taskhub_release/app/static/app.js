@@ -112,6 +112,7 @@ function bindTaskActions(){
 async function render(){
  const renderToken=++renderSequence;
  nav();
+ const roomSwitcher=document.querySelector('#room-switcher');if(roomSwitcher)roomSwitcher.hidden=tab!=='room';
  if(tab==='room'&&!activeRoom?.id){showRoomOnboarding();return}
  if(tab==='room'&&activeRoom&&!activeRoom.work_mode){showModeSetup();return}
  if(tab==='room'){
