@@ -129,8 +129,8 @@ async def start_bot():
                 VALUES(?,?,?,'helper') ON CONFLICT(telegram_id) DO UPDATE SET
                 username=excluded.username,first_name=excluded.first_name""",
                 (telegram_user.id,telegram_user.username,telegram_user.first_name or ""))
-            row=conn.execute("SELECT onboarding_step,onboarding_completed_at FROM users WHERE telegram_id=?",(telegram_user.id,)).fetchone()
-        if row["onboarding_completed_at"]:
+            row=conn.execute("SELECT onboarding_step,onboarding_completed_at,onboarding_skipped_at FROM users WHERE telegram_id=?",(telegram_user.id,)).fetchone()
+        if row["onboarding_completed_at"] or row["onboarding_skipped_at"]:
             await open_app(message,"С возвращением в TaskHub! Открой приложение или выбери команду бота.")
         elif row["onboarding_step"]==1:
             keyboard=InlineKeyboardMarkup(inline_keyboard=[
@@ -149,7 +149,7 @@ async def start_bot():
     @dp.message(Command("quest"))
     async def quest_command(message: Message):
         with connect() as conn:
-            conn.execute("UPDATE users SET onboarding_step=1,onboarding_completed_at=NULL WHERE telegram_id=?",(message.from_user.id,))
+            conn.execute("UPDATE users SET onboarding_step=1,onboarding_completed_at=NULL,onboarding_skipped_at=NULL WHERE telegram_id=?",(message.from_user.id,))
         await show_quest_intro(message)
 
     @dp.message(Command("skip"))
@@ -158,7 +158,7 @@ async def start_bot():
             row=conn.execute("SELECT id FROM users WHERE telegram_id=?",(message.from_user.id,)).fetchone()
             if row:
                 conn.execute("DELETE FROM subscriptions WHERE user_id=?",(row["id"],))
-                conn.execute("UPDATE users SET role_flags='none',onboarding_step=0 WHERE id=?",(row["id"],))
+                conn.execute("UPDATE users SET role_flags='none',onboarding_step=0,onboarding_skipped_at=CURRENT_TIMESTAMP WHERE id=?",(row["id"],))
         await open_app(message,"Квест пропущен. Роли и подписки не создавались. Ты можешь вернуться к нему командой /quest.")
 
     @dp.message(Command("tasks"))
