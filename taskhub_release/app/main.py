@@ -243,8 +243,22 @@ def ensure_rooms_schema(conn):
     found = {row["name"] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     )}
-    if not required.issubset(found):
-        raise HTTPException(503, "Комнаты ещё не включены: сначала выполните проверенную миграцию базы")
+    if required.issubset(found):
+        return
+
+    # A genuinely fresh installation can bootstrap the room schema in place.
+    # Never auto-migrate a populated legacy workspace: that requires the
+    # explicit backup-gated migration utility.
+    legacy_tables = ("projects", "stages", "tours", "tasks", "submissions", "ledger", "payouts")
+    for table in legacy_tables:
+        if conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]:
+            raise HTTPException(503, "Обнаружены старые данные. Для них нужна отдельная проверенная миграция.")
+    from .scripts.migrate_to_rooms import create_schema, SCHEMA_VERSION
+    create_schema(conn)
+    conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations(version,name) VALUES(?,?)",
+        (SCHEMA_VERSION, "fresh_install_rooms_schema"),
+    )
 
 
 def room_error(error: RoomError):
