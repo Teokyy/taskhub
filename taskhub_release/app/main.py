@@ -9,7 +9,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -101,6 +101,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="TaskHub", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
+@app.middleware("http")
+async def block_legacy_global_api(request, call_next):
+    """After the room migration, never serve unscoped legacy data endpoints."""
+    path = request.url.path
+    if path.startswith("/api/") and path not in {"/api/me", "/api/health"} and not path.startswith("/api/rooms"):
+        try:
+            with connect() as conn:
+                migrated = conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rooms'"
+                ).fetchone() is not None
+        except Exception:
+            migrated = False
+        if migrated:
+            return JSONResponse(
+                status_code=410,
+                content={"detail": "Глобальный API отключён. Используйте выбранную комнату."},
+            )
+    return await call_next(request)
+
+
+
 
 
 class RoomIn(BaseModel):
@@ -714,6 +736,12 @@ def health():
 def me(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     with connect() as conn:
+        migrated = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rooms'"
+        ).fetchone() is not None
+        if migrated:
+            # Financial totals and task counts must always be requested with a room context.
+            return {"user": account, "balance_kop": 0, "counts": {}}
         balance = conn.execute("SELECT COALESCE(SUM(amount_kop),0) n FROM ledger WHERE user_id=?", (account["id"],)).fetchone()["n"]
         counts = {r["status"]: r["n"] for r in conn.execute("SELECT status,COUNT(*) n FROM tasks WHERE assignee_id=? GROUP BY status", (account["id"],))}
     return {"user": account, "balance_kop": balance, "counts": counts}
