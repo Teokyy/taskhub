@@ -1850,6 +1850,43 @@ async def send_market_message(chat_id: int, data: SubmitIn, x_telegram_init_data
     return {"id":cur.lastrowid,"warning_external_contact":warning}
 
 
+@app.post("/api/market/tasks/{task_id}/cancel-request")
+async def request_market_cancellation(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        task=conn.execute("""SELECT t.id,t.title,t.created_by,t.status,r.executor_id,
+            owner.telegram_id owner_telegram_id,executor.telegram_id executor_telegram_id
+            FROM tasks t JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            JOIN users owner ON owner.id=t.created_by JOIN users executor ON executor.id=r.executor_id
+            WHERE t.id=? AND t.room_id IS NULL""",(task_id,)).fetchone()
+        if not task or task["status"]!="in_progress" or int(account["id"]) not in (int(task["created_by"]),int(task["executor_id"])):
+            raise HTTPException(409,"Взаимная отмена доступна только участникам активной сделки")
+        existing=conn.execute("SELECT * FROM task_cancel_requests WHERE task_id=?",(task_id,)).fetchone()
+        if existing and existing["status"]=="pending":
+            if int(existing["requested_by"])==int(account["id"]):
+                raise HTTPException(409,"Ты уже отправил запрос на отмену. Ждём второго участника.")
+            conn.execute("UPDATE task_cancel_requests SET accepted_by=?,status='accepted',resolved_at=CURRENT_TIMESTAMP WHERE task_id=?",
+                         (account["id"],task_id))
+            conn.execute("UPDATE tasks SET status='cancelled',assignee_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='in_progress'",(task_id,))
+            conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id=(SELECT id FROM responses WHERE task_id=? AND status='accepted')",(task_id,))
+            result="cancelled"
+        else:
+            conn.execute("""INSERT INTO task_cancel_requests(task_id,requested_by,accepted_by,status)
+                VALUES(?,?,NULL,'pending') ON CONFLICT(task_id) DO UPDATE SET
+                requested_by=excluded.requested_by,accepted_by=NULL,status='pending',
+                created_at=CURRENT_TIMESTAMP,resolved_at=NULL""",(task_id,account["id"]))
+            result="pending"
+        recipient=task["executor_telegram_id"] if int(account["id"])==int(task["created_by"]) else task["owner_telegram_id"]
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"],"request_mutual_cancellation","task",task_id,result))
+    if result=="pending":
+        await notify_telegram(recipient,f"Запрошена взаимная отмена сделки «{task['title']}». Открой TaskHub и подтверди или отклони запрос.")
+    else:
+        await notify_telegram(task["owner_telegram_id"],f"Сделка «{task['title']}» отменена по взаимному согласию.")
+        await notify_telegram(task["executor_telegram_id"],f"Сделка «{task['title']}» отменена по взаимному согласию.")
+    return {"ok":True,"status":result}
+
+
 @app.post("/api/market/tasks/{task_id}/complete")
 async def complete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
