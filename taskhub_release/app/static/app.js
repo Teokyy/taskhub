@@ -108,7 +108,14 @@ async function render(){
   showAdminHub();
  }
 }
-async function showFinanceScreen(){setTab('balance')}
+async function showFinanceScreen(){
+ try{
+  const finance=await api('/rooms/'+activeRoom.id+'/ledger');
+  const rows=finance.entries||[];
+  view.innerHTML='<div class="section-head"><button class="btn ghost" id="finance-back">← Профиль</button><h2>Финансы</h2></div><section class="panel"><div class="eyebrow">ТЕКУЩИЙ БАЛАНС</div><div style="font-size:27px;font-weight:850;margin-top:5px">'+rub(finance.balance_kop||0)+'</div><div class="muted" style="font-size:12px;margin-top:5px">Начисления за принятые задачи</div></section><div class="section-head"><h2>История начислений</h2></div><section class="panel">'+(rows.length?rows.map(x=>'<div class="ledger-row"><div><b>'+esc(x.title||x.kind)+'</b><small>'+esc(x.note||'Начисление')+' · '+esc(x.created_at)+'</small></div><b class="positive">+'+rub(x.amount_kop)+'</b></div>').join(''):empty('Начислений пока нет','После приёмки задачи здесь появится запись.'))+'</section>';
+  document.querySelector('#finance-back').onclick=()=>setTab('profile');
+ }catch(e){toast(e.message)}
+}
 async function showAdminHub(){
  const sections=[['Модерация','Проверка новых задач','open-moderation'],['Проверка работ','Приёмка и доработка','open-review'],['Все задачи','Общий список комнаты','open-all'],['Команда','Участники и роли','open-team'],['Финансы','Бюджет комнаты','open-budget']];
  view.innerHTML='<div class="section-head"><button class="btn ghost" id="admin-back">← Профиль</button><h2>Управление</h2></div>'+sections.map((s,i)=>'<button class="panel admin-link" data-admin="'+s[2]+'" style="display:flex;width:100%;align-items:center;text-align:left;justify-content:space-between;color:var(--text)"><span><b>'+s[0]+'</b><small class="muted" style="display:block;margin-top:4px">'+s[1]+'</small></span><span class="muted">›</span></button>').join('');
