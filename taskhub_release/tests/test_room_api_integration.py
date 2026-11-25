@@ -155,7 +155,7 @@ class RoomApiIntegrationTests(unittest.TestCase):
     def test_invite_join_limit_and_duplicate_membership(self):
         owner = self.headers("owner-token")
         worker = self.headers("reviewer-token")
-        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        room_id = self.client.post("/api/rooms", headers=owner, json={"name": "Invite test room"}).json()["id"]
         invite = self.client.post(
             f"/api/rooms/{room_id}/invites", headers=owner,
             json={"expires_in_days": 7, "max_uses": 1},
