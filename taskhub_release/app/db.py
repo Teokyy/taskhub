@@ -32,6 +32,19 @@ def init_db():
     with connect() as conn:
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS telegram_room_links(
+                room_id INTEGER PRIMARY KEY,
+                chat_id INTEGER UNIQUE NOT NULL,
+                chat_title TEXT NOT NULL DEFAULT '',
+                connected_by INTEGER,
+                connected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS telegram_room_link_codes(
+                room_id INTEGER PRIMARY KEY,
+                code_hash TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                created_by INTEGER NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS users(
                 id INTEGER PRIMARY KEY,
                 telegram_id INTEGER UNIQUE NOT NULL,
