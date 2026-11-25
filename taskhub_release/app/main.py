@@ -1848,13 +1848,15 @@ async def send_market_message(chat_id: int, data: SubmitIn, x_telegram_init_data
     import re
     warning=bool(re.search(r"(?:https?://|t\.me/|@[A-Za-z0-9_]{5,}|\+?\d[\d\s()\-]{8,})",message,re.I))
     with connect() as conn:
-        chat=conn.execute("""SELECT c.id,t.created_by,r.executor_id,t.title,
+        chat=conn.execute("""SELECT c.id,c.closed_at,t.created_by,r.executor_id,t.title,
             owner.telegram_id owner_telegram_id,executor.telegram_id executor_telegram_id
             FROM chats c JOIN responses r ON r.id=c.response_id JOIN tasks t ON t.id=r.task_id
             JOIN users owner ON owner.id=t.created_by JOIN users executor ON executor.id=r.executor_id
             WHERE c.id=?""",(chat_id,)).fetchone()
         if not chat or int(account["id"]) not in (int(chat["created_by"]),int(chat["executor_id"])):
             raise HTTPException(404,"Чат не найден")
+        if chat["closed_at"]:
+            raise HTTPException(409,"Сделка завершена. Чат доступен только для чтения.")
         cur=conn.execute("INSERT INTO messages(chat_id,sender_id,text) VALUES(?,?,?)",(chat_id,account["id"],message))
         recipient_id=chat["executor_id"] if int(account["id"])==int(chat["created_by"]) else chat["created_by"]
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"send_chat_message","chat",chat_id,f"message_id={cur.lastrowid}"))
@@ -1868,14 +1870,19 @@ async def send_market_message(chat_id: int, data: SubmitIn, x_telegram_init_data
 async def complete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
     with connect() as conn:
-        task=conn.execute("""SELECT t.*,r.id response_id,u.telegram_id executor_telegram_id
-            FROM tasks t JOIN responses r ON r.task_id=t.id AND r.status='accepted'
-            JOIN users u ON u.id=r.executor_id WHERE t.id=? AND t.created_by=? AND t.room_id IS NULL AND t.status='in_progress'""",(task_id,account["id"])).fetchone()
+        task=conn.execute("""SELECT t.*,r.id response_id,executor.telegram_id executor_telegram_id,
+            owner.telegram_id owner_telegram_id FROM tasks t
+            JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            JOIN users executor ON executor.id=r.executor_id
+            JOIN users owner ON owner.id=t.created_by
+            WHERE t.id=? AND t.created_by=? AND t.room_id IS NULL AND t.status='in_progress'""",(task_id,account["id"])).fetchone()
         if not task: raise HTTPException(404,"Активная сделка не найдена")
         conn.execute("UPDATE tasks SET status='done',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,))
         conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id=?",(task["response_id"],))
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"complete_market_task","task",task_id))
-    await notify_telegram(task["executor_telegram_id"],f"🎉 Заказчик подтвердил выполнение «{task['title']}». Оставьте отзыв друг другу.")
+    reminder=f"🎉 Сделка «{task['title']}» завершена. Не забудьте оставить друг другу отзыв в TaskHub."
+    await notify_telegram(task["executor_telegram_id"],reminder)
+    await notify_telegram(task["owner_telegram_id"],reminder)
     return {"ok":True,"status":"done"}
 
 
