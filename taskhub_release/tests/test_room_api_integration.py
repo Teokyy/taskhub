@@ -167,7 +167,7 @@ class RoomApiIntegrationTests(unittest.TestCase):
         self.assertEqual(joined.json()["room_id"], room_id)
         self.assertEqual(joined.json()["work_mode"], None)
         duplicate = self.client.post("/api/rooms/join", headers=worker, json={"code": code})
-        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(duplicate.status_code, 410)
         with db.connect() as conn:
             row = conn.execute(
                 "SELECT uses_count FROM room_invites WHERE id=?", (invite.json()["id"],)
