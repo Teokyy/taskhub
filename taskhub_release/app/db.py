@@ -170,6 +170,7 @@ def init_db():
         _add_column(conn, "users", "role_flags TEXT NOT NULL DEFAULT 'both'")
         _add_column(conn, "users", "onboarding_step INTEGER NOT NULL DEFAULT 0")
         _add_column(conn, "users", "onboarding_completed_at TEXT")
+        _add_column(conn, "users", "onboarding_skipped_at TEXT")
         _add_column(conn, "tasks", "room_id INTEGER")
         for definition in (
             "project_id INTEGER REFERENCES projects(id)",
