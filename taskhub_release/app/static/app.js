@@ -91,6 +91,10 @@ function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.t
 function setTab(next){tab=(next==='home'||next==='mine'||next==='balance')?'profile':next;nav();render()}
 async function toggleWorkMode(){if(!activeRoom?.id)return toast('Сначала выбери рабочую комнату');const next=workMode()==='customer'?'executor':'customer';try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode:next})});activeRoom={...activeRoom,work_mode:next};toast(next==='customer'?'Режим изменён: заказчик':'Режим изменён: исполнитель');render()}catch(e){toast(e.message)}}
 function greeting(){const h=new Date().getHours();return h<6?'Доброй ночи':h<12?'Доброе утро':h<18?'Добрый день':'Добрый вечер'}
+function startPresenceHeartbeat(){
+ const ping=()=>api('/presence',{method:'POST'}).catch(()=>{});
+ ping();setInterval(ping,60000);
+}
 async function boot(){
  try{
   me=await api('/me');
@@ -98,6 +102,7 @@ async function boot(){
   await loadRooms();
   renderRoomSelector();
   await refreshMe();
+  startPresenceHeartbeat();
   await render();
  }catch(e){
   const web=window.Telegram?.WebApp,data=web?.initData||'';
