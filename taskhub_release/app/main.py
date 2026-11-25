@@ -1794,87 +1794,21 @@ def create_market_dispute(task_id: int, data: MarketDisputeIn, x_telegram_init_d
 
 
 @app.post("/api/market/tasks/{task_id}/claim")
-async def claim_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account = user(x_telegram_init_data)
-    with connect() as conn:
-        task = conn.execute(
-            """SELECT t.*,u.telegram_id creator_telegram_id FROM tasks t
-               LEFT JOIN users u ON u.id=t.created_by
-               WHERE t.id=? AND t.room_id IS NULL AND t.status='available'
-               AND t.moderation_status='approved'""", (task_id,)
-        ).fetchone()
-        if not task:
-            raise HTTPException(409, "Задача уже занята или недоступна")
-        if int(task["created_by"]) == int(account["id"]):
-            raise HTTPException(403, "Нельзя взять собственную задачу")
-        cur = conn.execute(
-            "UPDATE tasks SET status='in_progress',assignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND room_id IS NULL AND status='available'",
-            (account["id"], task_id),
-        )
-        if cur.rowcount != 1:
-            raise HTTPException(409, "Задача уже занята")
-        conn.execute(
-            "INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",
-            (account["id"], "claim_market_task", "task", task_id),
-        )
-    await notify_telegram(task["creator_telegram_id"], f"👀 Твою задачу на бирже взяли в работу: «{task['title']}»")
-    return {"ok": True, "status": "in_progress"}
+def claim_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    user(x_telegram_init_data)
+    raise HTTPException(410, "На бирже нельзя сразу забрать задание. Сначала отправь отклик, заказчик выберет исполнителя.")
 
 
 @app.post("/api/market/tasks/{task_id}/submit")
-async def submit_market_task(task_id: int, data: SubmitIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account = user(x_telegram_init_data)
-    with connect() as conn:
-        task = conn.execute(
-            "SELECT t.*,u.telegram_id creator_telegram_id FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.id=? AND t.room_id IS NULL AND t.assignee_id=? AND t.status IN ('in_progress','revision')",
-            (task_id, account["id"]),
-        ).fetchone()
-        if not task:
-            raise HTTPException(409, "Нельзя сдать эту задачу")
-        cur = conn.execute("INSERT INTO submissions(task_id,user_id,body) VALUES(?,?,?)", (task_id, account["id"], data.body.strip()))
-        conn.execute("UPDATE tasks SET status='submitted',updated_at=CURRENT_TIMESTAMP WHERE id=? AND room_id IS NULL", (task_id,))
-        conn.execute(
-            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
-            (account["id"], "submit_market_task", "submission", cur.lastrowid, f"task_id={task_id}"),
-        )
-    await notify_telegram(task["creator_telegram_id"], f"📨 Работа по задаче «{task['title']}» отправлена на проверку.")
-    return {"ok": True, "status": "submitted"}
+def submit_market_task(task_id: int, data: SubmitIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    user(x_telegram_init_data)
+    raise HTTPException(410, "Сдача работы через старую форму отключена. Используй чат сделки; завершение подтверждает заказчик.")
 
 
 @app.post("/api/market/tasks/{task_id}/review")
 def review_market_task(task_id: int, data: ReviewIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account = user(x_telegram_init_data)
-    if data.decision not in ("accept", "revision", "reject"):
-        raise HTTPException(400, "Неизвестное решение")
-    if data.decision in ("revision", "reject") and not data.comment.strip():
-        raise HTTPException(400, "Укажи причину")
-    if data.quality not in QUALITY_FACTORS:
-        raise HTTPException(400, "Неизвестная оценка качества")
-    status = {"accept": "accepted", "revision": "revision", "reject": "rejected"}[data.decision]
-    with connect() as conn:
-        task = conn.execute(
-            "SELECT * FROM tasks WHERE id=? AND room_id IS NULL AND created_by=? AND status='submitted'",
-            (task_id, account["id"]),
-        ).fetchone()
-        if not task:
-            raise HTTPException(404, "Сдача не найдена или принадлежит не тебе")
-        cur = conn.execute(
-            "UPDATE tasks SET status=?,quality_factor=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND room_id IS NULL AND status='submitted'",
-            (status, QUALITY_FACTORS[data.quality], task_id),
-        )
-        if cur.rowcount != 1:
-            raise HTTPException(409, "Работа уже рассмотрена")
-        if data.decision == "accept":
-            amount = int(round(task["reward_kop"] * QUALITY_FACTORS[data.quality]))
-            conn.execute(
-                "INSERT INTO ledger(user_id,task_id,room_id,amount_kop,kind,note) VALUES(?,?,NULL,?,?,?)",
-                (task["assignee_id"], task_id, amount, "task_earning", f"Принято · качество: {data.quality} · {data.comment.strip()}"),
-            )
-        conn.execute(
-            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
-            (account["id"], "review_market_task", "task", task_id, f"quality={data.quality};{data.comment.strip()}"),
-        )
-    return {"ok": True, "status": status}
+    user(x_telegram_init_data)
+    raise HTTPException(410, "Старая проверка качества не используется в MVP. Завершение сделки подтверждается заказчиком.")
 
 
 @app.get("/api/tasks")
