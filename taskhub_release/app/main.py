@@ -15,6 +15,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .auth import verify_telegram_init_data
 from .db import connect, init_db
@@ -97,9 +98,10 @@ async def category_digest_worker():
                     FROM users u JOIN subscriptions s ON s.user_id=u.id""").fetchall()
                 batches=[]
                 for subscriber in subscribers:
-                    category_ids=[x["category_id"] for x in conn.execute(
-                        "SELECT category_id FROM subscriptions WHERE user_id=?",(subscriber["user_id"],)
-                    ).fetchall()]
+                    subscription_rows=conn.execute("""SELECT c.id,c.name,p.name parent_name FROM subscriptions s
+                        JOIN categories c ON c.id=s.category_id LEFT JOIN categories p ON p.id=c.parent_id
+                        WHERE s.user_id=?""",(subscriber["user_id"],)).fetchall()
+                    category_ids=[x["id"] for x in subscription_rows]
                     if not category_ids: continue
                     marks=",".join("?" for _ in category_ids)
                     rows=conn.execute(f"""SELECT t.id,t.title,t.category FROM tasks t
@@ -112,12 +114,20 @@ async def category_digest_worker():
                     cur=conn.execute("INSERT OR IGNORE INTO digest_windows(user_id,window_start) VALUES(?,?)",
                                      (subscriber["user_id"],window_start))
                     if cur.rowcount:
-                        batches.append((subscriber["user_id"],subscriber["telegram_id"],[dict(x) for x in rows]))
-            for user_id,telegram_id,rows in batches:
+                        batches.append((subscriber["user_id"],subscriber["telegram_id"],[dict(x) for x in rows],[dict(x) for x in subscription_rows]))
+            for user_id,telegram_id,rows,subscription_rows in batches:
                 lines=[f"• {x['title']} — {x['category']}" for x in rows[:15]]
                 message="🆕 Новые задания по твоим подпискам:\n"+"\n".join(lines)
                 if len(rows)>15: message+=f"\nИ ещё {len(rows)-15} заданий."
-                await notify_telegram(telegram_id,message)
+                if _bot:
+                    keyboard=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="Отключить: "+(x["parent_name"]+" / " if x["parent_name"] else "")+x["name"],callback_data=f"sub:off:{x['id']}")]
+                        for x in subscription_rows
+                    ])
+                    try:
+                        await _bot.send_message(chat_id=telegram_id,text=message,reply_markup=keyboard)
+                    except Exception:
+                        log.exception("CATEGORY_DIGEST_SEND_FAILED user_id=%s",user_id)
                 with connect() as conn:
                     conn.execute("UPDATE digest_windows SET sent_at=CURRENT_TIMESTAMP WHERE user_id=? AND window_start=?",
                                  (user_id,window_start))
