@@ -119,14 +119,21 @@ async function setMode(mode){try{if(!activeRoom?.id){await loadRooms();renderRoo
 
 function empty(title,desc,action=''){return '<div class="empty"><b>'+esc(title)+'</b>'+esc(desc)+(action||'')+'</div>'}
 function taskCard(t,adminView=false){
+ const marketTask=t.room_id===null||t.room_id===undefined,own=Number(t.created_by)===Number(me.user.id),executor=Number(t.assignee_id)===Number(me.user.id);
  let action='';
- const marketTask=t.room_id===null||t.room_id===undefined;
- if(marketTask&&t.status==='available'&&Number(t.created_by)!==Number(me.user.id))action='<button class="btn" data-market-claim="'+t.id+'">Откликнуться</button>';
- else if(!marketTask&&t.status==='available'&&workMode()==='executor'&&Number(t.created_by)!==Number(me.user.id))action='<button class="btn" data-claim="'+t.id+'">Откликнуться</button>';
- if(['in_progress','revision'].includes(t.status)&&Number(t.assignee_id)===Number(me.user.id))action='<button class="btn" data-submit="'+t.id+'" data-market="'+(marketTask?'1':'0')+'">Сдать работу</button>'+(t.status==='in_progress'&&!marketTask?'<button class="btn secondary" data-refuse="'+t.id+'">Отказаться</button>':'');
- if(marketTask&&t.status==='submitted'&&Number(t.created_by)===Number(me.user.id))action='<button class="btn" data-market-review="accept" data-id="'+t.id+'">Принять работу</button><button class="btn secondary" data-market-review="revision" data-id="'+t.id+'">На доработку</button><button class="btn danger" data-market-review="reject" data-id="'+t.id+'">Отклонить</button>';
- if(marketTask&&Number(t.created_by)===Number(me.user.id)&&t.status==='available')action+='<button class="btn secondary" data-edit-market="'+t.id+'">Редактировать</button><button class="btn danger" data-delete-market="'+t.id+'">Снять с публикации</button>';
- const statuses={available:'Открыта',in_progress:'В работе',submitted:'На проверке',revision:'Нужна доработка',accepted:'Принята',rejected:'Отклонена',cancelled:'Отменена',not_completed:'Не выполнена'};
+ if(marketTask&&['open','available'].includes(t.status)){
+  if(!own)action='<button class="btn" data-market-response="'+t.id+'">Откликнуться</button>';
+  else action='<button class="btn secondary" data-view-responses="'+t.id+'">Отклики</button><button class="btn secondary" data-edit-market="'+t.id+'">Редактировать</button><button class="btn danger" data-delete-market="'+t.id+'">Снять с публикации</button>';
+ }
+ if(marketTask&&t.status==='in_progress'){
+  if(own)action='<button class="btn" data-complete-market="'+t.id+'">Подтвердить выполнение</button>';
+  if(executor)action='<button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button>';
+  if(own||executor)action+='<button class="btn danger" data-dispute-market="'+t.id+'">Пожаловаться</button>';
+ }
+ if(marketTask&&t.status==='done'&&(own||executor))action='<button class="btn secondary" data-review-task="'+t.id+'">Оставить отзыв</button>';
+ if(!marketTask&&t.status==='available'&&workMode()==='executor'&&!own)action='<button class="btn" data-claim="'+t.id+'">Взять задачу</button>';
+ if(['in_progress','revision'].includes(t.status)&&executor&&!marketTask)action='<button class="btn" data-submit="'+t.id+'" data-market="0">Сдать работу</button>';
+ const statuses={open:'Открыта',available:'Открыта',in_progress:'В работе',submitted:'На проверке',revision:'Нужна доработка',accepted:'Принята',done:'Завершена',disputed:'Спор',rejected:'Отклонена',cancelled:'Отменена',not_completed:'Не выполнена'};
  return '<article class="panel task"><div class="task-top"><span class="pill">'+esc(t.category||'Другое')+'</span><span class="price">'+rub(t.reward_kop)+'</span></div><h3>'+esc(t.title)+'</h3><p>'+esc(t.description||'Без дополнительного описания')+'</p><div class="task-bottom"><span class="status">'+(statuses[t.status]||esc(t.status))+'</span><span class="deadline">'+(t.deadline?'До '+esc(t.deadline):'Без срока')+'</span></div>'+(adminView&&t.assignee_name?'<div class="divider"></div><span class="muted">Исполнитель: '+esc(t.assignee_name)+'</span>':'')+(action?'<div class="actions">'+action+'</div>':'')+'</article>'
 }
 function bindTaskActions(){
@@ -136,7 +143,39 @@ function bindTaskActions(){
  view.querySelectorAll('[data-market-review]').forEach(b=>b.onclick=()=>reviewMarketTask(b.dataset.id,b.dataset.marketReview));
  view.querySelectorAll('[data-edit-market]').forEach(b=>b.onclick=()=>{const task=(me.tasks||[]).find(t=>String(t.id)===b.dataset.editMarket)||(window.marketTaskCache||[]).find(t=>String(t.id)===b.dataset.editMarket);if(task)createForm('market',task);else api('/market/tasks?status=mine').then(rows=>{const t=rows.find(x=>String(x.id)===b.dataset.editMarket);if(t)createForm('market',t);else toast('Задание не найдено')}).catch(e=>toast(e.message))});
  view.querySelectorAll('[data-delete-market]').forEach(b=>b.onclick=()=>deleteMarketTask(b.dataset.deleteMarket));
+ view.querySelectorAll('[data-market-response]').forEach(b=>b.onclick=()=>createMarketResponse(b.dataset.marketResponse));
+ view.querySelectorAll('[data-view-responses]').forEach(b=>b.onclick=()=>showMarketResponses(b.dataset.viewResponses));
+ view.querySelectorAll('[data-complete-market]').forEach(b=>b.onclick=()=>completeMarketTask(b.dataset.completeMarket));
+ view.querySelectorAll('[data-open-deal-chat]').forEach(b=>b.onclick=()=>showDealChatByTask(b.dataset.openDealChat));
+ view.querySelectorAll('[data-dispute-market]').forEach(b=>b.onclick=()=>createMarketDispute(b.dataset.disputeMarket));
+ view.querySelectorAll('[data-review-task]').forEach(b=>b.onclick=()=>createMarketReview(b.dataset.reviewTask));
 }
+
+async function createMarketResponse(taskId){
+ const message=prompt("Коротко расскажи, почему ты подходишь для этого задания","");
+ if(message===null)return;
+ const deadline=prompt("Предлагаемый срок (необязательно). Оставь пустым, если не нужно","");
+ try{await api('/market/tasks/'+taskId+'/responses',{method:'POST',body:JSON.stringify({message,proposed_deadline:deadline||null})});toast('Отклик отправлен заказчику');await render()}catch(e){toast(e.message)}
+}
+async function showMarketResponses(taskId){
+ try{const rows=await api('/market/tasks/'+taskId+'/responses');if(!rows.length){toast('Откликов пока нет');return}
+ const html=rows.map(r=>'<article class="panel"><b>'+esc(r.executor_name||'Исполнитель')+'</b><p>'+esc(r.message||'Без сопроводительного сообщения')+'</p><div class="muted">'+esc(r.proposed_deadline||'Срок не предложен')+' · '+esc(r.status)+'</div>'+(r.status==='sent'?'<button class="btn" data-accept-response="'+r.id+'">Выбрать исполнителя</button>':'')+'</article>').join('');
+ view.innerHTML='<div class="section-head"><button class="btn ghost" id="responses-back">← Биржа</button><h2>Отклики</h2></div>'+html;document.querySelector('#responses-back').onclick=()=>setTab('exchange');
+ view.querySelectorAll('[data-accept-response]').forEach(b=>b.onclick=async()=>{try{await api('/market/responses/'+b.dataset.acceptResponse+'/accept',{method:'POST'});toast('Исполнитель выбран, чат открыт');await setTab('profile')}catch(e){toast(e.message)}});
+ }catch(e){toast(e.message)}
+}
+async function completeMarketTask(id){if(!confirm('Подтвердить выполнение задания?'))return;try{await api('/market/tasks/'+id+'/complete',{method:'POST'});toast('Сделка завершена');await render()}catch(e){toast(e.message)}}
+async function createMarketDispute(id){const reason=prompt('Опиши проблему по сделке');if(!reason)return;try{await api('/market/tasks/'+id+'/disputes',{method:'POST',body:JSON.stringify({reason})});toast('Жалоба отправлена модератору');await render()}catch(e){toast(e.message)}}
+async function createMarketReview(id){const rating=Number(prompt('Оценка от 1 до 5','5'));if(!Number.isInteger(rating)||rating<1||rating>5)return toast('Оценка должна быть от 1 до 5');const text=prompt('Короткий отзыв (необязательно)','')||'';try{await api('/market/tasks/'+id+'/reviews',{method:'POST',body:JSON.stringify({rating,text})});toast('Отзыв сохранён')}catch(e){toast(e.message)}}
+async function showDealChatByTask(taskId){const rows=await api('/market/chats');const chat=rows.find(x=>String(x.task_id)===String(taskId));if(chat)showDealChat(chat.chat_id,chat.title);else toast('Чат сделки не найден')}
+async function showDealChat(chatId,title){
+ let lastId=0;view.innerHTML='<div class="section-head"><button class="btn ghost" id="chat-back">← Профиль</button><h2>'+esc(title||'Чат сделки')+'</h2></div><div id="deal-messages" class="panel" style="min-height:220px"></div><textarea class="field" id="deal-message" maxlength="2000" placeholder="Напиши сообщение…"></textarea><button class="btn block" id="send-deal-message">Отправить</button>';
+ document.querySelector('#chat-back').onclick=()=>setTab('profile');
+ const load=async()=>{try{const rows=await api('/market/chats/'+chatId+'/messages?after_id='+lastId);const box=document.querySelector('#deal-messages');if(!box)return;rows.forEach(x=>{lastId=Math.max(lastId,x.id);box.insertAdjacentHTML('beforeend','<div style="padding:8px 0;border-bottom:1px solid var(--line)"><b>'+esc(x.sender_name)+'</b><p style="margin:4px 0">'+esc(x.text)+'</p><small class="muted">'+esc(x.created_at)+'</small></div>')})}catch(e){toast(e.message)}};
+ await load();const timer=setInterval(()=>{if(document.querySelector('#deal-messages'))load();else clearInterval(timer)},4000);
+ document.querySelector('#send-deal-message').onclick=async()=>{const el=document.querySelector('#deal-message'),text=el.value.trim();if(!text)return;try{const r=await api('/market/chats/'+chatId+'/messages',{method:'POST',body:JSON.stringify({body:text})});el.value='';if(r.warning_external_contact)toast('Напоминание: не передавай личные контакты незнакомым пользователям');await load()}catch(e){toast(e.message)}};
+}
+
 async function showMarketServices(){
  let services=[];try{services=await api('/market/services')}catch(e){toast(e.message);return}
  view.innerHTML='<section class="hello"><div class="eyebrow">ПОСТОЯННЫЕ ПРЕДЛОЖЕНИЯ</div><h1>Услуги</h1><p>Многоразовые предложения: пополнение, игровые услуги, настройка Discord и другие работы. Заказы создаются отдельно каждый раз.</p></section><div class="actions"><button class="btn" id="new-market-service">Разместить услугу</button><button class="btn secondary" id="my-service-orders">Мои заказы</button></div><div id="market-service-list">'+(services.length?services.map(x=>'<article class="panel task"><div class="task-top"><span class="pill">'+esc(x.category)+'</span><span class="price">'+rub(x.price_kop)+'</span></div><h3>'+esc(x.title)+'</h3><p>'+esc(x.description||'Без описания')+'</p><div class="task-bottom"><span class="muted">Продавец: '+esc(x.seller_name||'Участник')+'</span><span class="muted">Срок: '+Math.ceil(x.delivery_minutes/60)+' ч.</span></div>'+(Number(x.seller_id)===Number(me.user.id)?'<span class="muted">Твоя услуга</span>':'<button class="btn block" data-order-service="'+x.id+'">Заказать</button>')+'</article>').join(''):empty('Услуг пока нет','Размести первое постоянное предложение.'))+'</div>';
