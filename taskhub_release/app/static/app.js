@@ -79,7 +79,7 @@ function empty(title,desc,action=''){return '<div class="empty"><b>'+esc(title)+
 function taskCard(t,adminView=false){
  let action='';
  if(t.status==='available'&&workMode()==='executor'&&Number(t.created_by)!==Number(me.user.id))action='<button class="btn" data-claim="'+t.id+'">Взять задачу</button>';
- if(['in_progress','revision'].includes(t.status)&&Number(t.assignee_id)===Number(me.user.id))action='<button class="btn" data-submit="'+t.id+'">Сдать работу</button>';
+ if(['in_progress','revision'].includes(t.status)&&Number(t.assignee_id)===Number(me.user.id))action='<button class="btn" data-submit="'+t.id+'">Сдать работу</button>'+(t.status==='in_progress'?'<button class="btn secondary" data-refuse="'+t.id+'">Отказаться</button>':'');
  const statuses={available:'Открыта',in_progress:'В работе',submitted:'На проверке',revision:'Нужна доработка',accepted:'Принята',rejected:'Отклонена',cancelled:'Отменена',not_completed:'Не выполнена'};
  return '<article class="panel task"><div class="task-top"><span class="pill">'+esc(t.category||'Другое')+'</span><span class="price">'+rub(t.reward_kop)+'</span></div><h3>'+esc(t.title)+'</h3><p>'+esc(t.description||'Без дополнительного описания')+'</p><div class="task-bottom"><span class="status">'+(statuses[t.status]||esc(t.status))+'</span><span class="deadline">'+(t.deadline?'До '+esc(t.deadline):'Без срока')+'</span></div>'+(adminView&&t.assignee_name?'<div class="divider"></div><span class="muted">Исполнитель: '+esc(t.assignee_name)+'</span>':'')+(action?'<div class="actions">'+action+'</div>':'')+'</article>'
 }
