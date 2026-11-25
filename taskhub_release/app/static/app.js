@@ -99,8 +99,7 @@ async function boot(){
  try{
   me=await api('/me');
   document.querySelector('#avatar').innerHTML=me.user.photo_url?'<img src="'+esc(me.user.photo_url)+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">':esc((me.user.first_name||'T').slice(0,1).toUpperCase());
-  await loadRooms();
-  renderRoomSelector();
+  activeRoom=null;rooms=[];
   await refreshMe();
   startPresenceHeartbeat();
   await render();
