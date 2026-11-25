@@ -139,6 +139,14 @@ def create_schema(conn: sqlite3.Connection) -> None:
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TRIGGER IF NOT EXISTS budget_events_no_update
+        BEFORE UPDATE ON budget_events
+        BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END;
+
+    CREATE TRIGGER IF NOT EXISTS budget_events_no_delete
+        BEFORE DELETE ON budget_events
+        BEGIN SELECT RAISE(ABORT, 'budget_events are immutable'); END;
+
     CREATE TABLE IF NOT EXISTS task_deadline_events (
         id INTEGER PRIMARY KEY,
         task_id INTEGER NOT NULL REFERENCES tasks(id),
