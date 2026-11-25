@@ -352,8 +352,10 @@ async def claim(task_id:int,x_telegram_init_data:str=Header(default="",alias="X-
     account=user(x_telegram_init_data)
     if account["role"]=="admin": raise HTTPException(403,"Администратор не может брать задачи исполнителя")
     with connect() as conn:
-        task=conn.execute("SELECT t.title,creator.telegram_id creator_telegram_id FROM tasks t LEFT JOIN users creator ON creator.id=t.created_by WHERE t.id=? AND t.status='available'",(task_id,)).fetchone()
-        if not task: raise HTTPException(409,"Задача уже занята или недоступна")
+        task=conn.execute("SELECT t.title,t.created_by,creator.telegram_id creator_telegram_id FROM tasks t LEFT JOIN users creator ON creator.id=t.created_by WHERE t.id=? AND t.status='available' AND t.moderation_status='approved'",(task_id,)).fetchone()
+        if not task: raise HTTPException(409,"Задача ещё не одобрена, уже занята или недоступна")
+        if int(task["created_by"]) == int(account["id"]):
+            raise HTTPException(403,"Нельзя взять собственную задачу. Её должен выполнить другой участник.")
         cur=conn.execute("UPDATE tasks SET status='in_progress',assignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='available'",(account["id"],task_id))
         if cur.rowcount!=1: raise HTTPException(409,"Задача уже занята или недоступна")
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"claim","task",task_id))
@@ -416,7 +418,7 @@ def review(x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Dat
             """SELECT t.*,u.first_name assignee_name,s.id submission_id,s.body submission,s.created_at submitted_at
             FROM tasks t JOIN users u ON u.id=t.assignee_id
             LEFT JOIN submissions s ON s.id=(SELECT MAX(id) FROM submissions WHERE task_id=t.id)
-            WHERE t.status='submitted' ORDER BY t.id""")]
+            WHERE t.status='submitted' AND t.assignee_id<>? ORDER BY t.id""",(account["id"],))]
 
 
 @app.post("/api/tasks/{task_id}/review")
@@ -429,6 +431,8 @@ def decide(task_id:int,data:ReviewIn,x_telegram_init_data:str=Header(default="",
     with connect() as conn:
         task=conn.execute("SELECT * FROM tasks WHERE id=? AND status='submitted'",(task_id,)).fetchone()
         if not task: raise HTTPException(409,"Работа уже рассмотрена или не найдена")
+        if int(task["assignee_id"]) == int(account["id"]):
+            raise HTTPException(403,"Нельзя проверять и принимать собственную работу.")
         cur=conn.execute("UPDATE tasks SET status=?,quality_factor=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='submitted'",(status,QUALITY_FACTORS[data.quality],task_id))
         if cur.rowcount!=1: raise HTTPException(409,"Работа уже рассмотрена")
         if data.decision=="accept":
