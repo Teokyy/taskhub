@@ -167,7 +167,7 @@ def init_db():
         )
         # Additive migrations preserve the existing MVP database and its balances.
         _add_column(conn, "users", "photo_url TEXT")
-        _add_column(conn, "users", "role_flags TEXT NOT NULL DEFAULT 'both'")
+        _add_column(conn, "users", "role_flags TEXT NOT NULL DEFAULT 'none'")
         _add_column(conn, "users", "onboarding_step INTEGER NOT NULL DEFAULT 0")
         _add_column(conn, "users", "onboarding_completed_at TEXT")
         _add_column(conn, "users", "onboarding_skipped_at TEXT")
@@ -317,6 +317,7 @@ def init_db():
             parent_id = conn.execute("SELECT id FROM categories WHERE name=? AND parent_id IS NULL", (parent_name,)).fetchone()["id"]
             for child_name in children:
                 conn.execute("INSERT OR IGNORE INTO categories(name,parent_id) VALUES(?,?)", (child_name,parent_id))
+        conn.execute("UPDATE users SET role_flags='none' WHERE onboarding_step=0 AND onboarding_completed_at IS NULL AND onboarding_skipped_at IS NULL AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriptions.user_id=users.id)")
         conn.execute("UPDATE tasks SET author_id=created_by WHERE author_id IS NULL AND created_by IS NOT NULL")
         conn.execute("UPDATE tasks SET status='open' WHERE room_id IS NULL AND status='available' AND assignee_id IS NULL")
 
