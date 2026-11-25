@@ -153,6 +153,7 @@ def init_db():
             """
         )
         # Additive migrations preserve the existing MVP database and its balances.
+        _add_column(conn, "users", "photo_url TEXT")
         for definition in (
             "project_id INTEGER REFERENCES projects(id)",
             "stage_id INTEGER REFERENCES stages(id)",
