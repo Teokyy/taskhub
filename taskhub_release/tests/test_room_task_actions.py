@@ -1,7 +1,11 @@
 import sqlite3
 import unittest
+import sys
+from pathlib import Path
 
-from app.room_task_actions import refuse_task
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from app.task_refusal import refuse_task
 from app.rooms import RoomError
 
 
