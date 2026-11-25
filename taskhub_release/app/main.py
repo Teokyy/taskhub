@@ -1465,7 +1465,7 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
         reputation = conn.execute("SELECT ROUND(AVG(rating),1) average,COUNT(*) review_count FROM reviews WHERE target_id=?", (account["id"],)).fetchone()
         achievements = [dict(x) for x in conn.execute("SELECT code,earned_at FROM achievements WHERE user_id=? ORDER BY earned_at",(account["id"],)).fetchall()]
         mine = conn.execute(
-            "SELECT * FROM tasks WHERE room_id IS NULL AND (created_by=? OR assignee_id=?) ORDER BY id DESC LIMIT 100",
+            "SELECT tasks.*,(SELECT requested_by FROM task_cancel_requests cr WHERE cr.task_id=tasks.id AND cr.status='pending') cancel_requested_by FROM tasks WHERE room_id IS NULL AND (created_by=? OR assignee_id=?) ORDER BY id DESC LIMIT 100",
             (account["id"], account["id"]),
         ).fetchall()
     return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "achievements": achievements, "tasks": [dict(r) for r in mine]}
@@ -1494,7 +1494,7 @@ def market_tasks(status: str = "available", x_telegram_init_data: str = Header(d
             ).fetchall()
         elif status == "available":
             rows = conn.execute(
-                "SELECT t.*,u.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.room_id IS NULL AND t.status IN ('open','available') AND t.moderation_status='approved' ORDER BY t.id DESC"
+                "SELECT t.*,(SELECT requested_by FROM task_cancel_requests cr WHERE cr.task_id=t.id AND cr.status='pending') cancel_requested_by,u.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.room_id IS NULL AND t.status IN ('open','available') AND t.moderation_status='approved' ORDER BY t.id DESC"
             ).fetchall()
         else:
             raise HTTPException(400, "Неизвестный фильтр биржи")
@@ -1902,6 +1902,27 @@ async def send_market_message(chat_id: int, data: SubmitIn, x_telegram_init_data
     if not is_online:
         await notify_telegram(recipient_telegram,f"💬 Новое сообщение по заданию «{chat['title']}»")
     return {"id":cur.lastrowid,"warning_external_contact":warning}
+
+
+@app.post("/api/market/tasks/{task_id}/cancel-request/reject")
+async def reject_market_cancellation(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        task=conn.execute("""SELECT t.id,t.title,t.created_by,r.executor_id,
+            cr.requested_by,owner.telegram_id owner_telegram_id,executor.telegram_id executor_telegram_id
+            FROM tasks t JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            JOIN users owner ON owner.id=t.created_by JOIN users executor ON executor.id=r.executor_id
+            JOIN task_cancel_requests cr ON cr.task_id=t.id AND cr.status='pending'
+            WHERE t.id=? AND t.status='in_progress'""",(task_id,)).fetchone()
+        if not task or int(account["id"]) not in (int(task["created_by"]),int(task["executor_id"])):
+            raise HTTPException(404,"Запрос на отмену не найден")
+        if int(task["requested_by"])==int(account["id"]):
+            raise HTTPException(409,"Нельзя отклонить собственный запрос")
+        conn.execute("UPDATE task_cancel_requests SET status='rejected',accepted_by=?,resolved_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='pending'",(account["id"],task_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"reject_mutual_cancellation","task",task_id))
+    requester=task["executor_telegram_id"] if int(task["requested_by"])==int(task["executor_id"]) else task["owner_telegram_id"]
+    await notify_telegram(requester,f"Вторая сторона отклонила запрос на отмену сделки «{task['title']}».")
+    return {"ok":True,"status":"rejected"}
 
 
 @app.post("/api/market/tasks/{task_id}/cancel-request")
