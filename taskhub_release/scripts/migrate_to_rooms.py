@@ -45,7 +45,7 @@ def verify_database(conn: sqlite3.Connection) -> None:
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    conn.executescript("""
+    schema_sql = """
     CREATE TABLE IF NOT EXISTS schema_migrations (
         version INTEGER PRIMARY KEY,
         name TEXT NOT NULL,
@@ -133,7 +133,11 @@ def create_schema(conn: sqlite3.Connection) -> None:
         sent_at TEXT,
         UNIQUE(task_id,event_type,scheduled_at)
     );
-    """)
+    """
+    # Keep DDL inside the caller transaction; executescript() auto-commits.
+    for statement in schema_sql.split(";"):
+        if statement.strip():
+            conn.execute(statement)
 
     # Additive columns retain existing IDs and records. Nullable room_id permits
     # the transaction to create the legacy room and backfill all rows safely.
@@ -258,7 +262,14 @@ def main() -> int:
                     raise SystemExit("Target DB differs from verified backup; refusing migration")
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         safety_copy = db_path.with_name(db_path.name + f".pre-rooms-{stamp}.copy")
-        shutil.copy2(db_path, safety_copy)
+        source = sqlite3.connect(str(db_path), timeout=30)
+        safety = sqlite3.connect(str(safety_copy), timeout=30)
+        try:
+            source.backup(safety)
+            safety.commit()
+        finally:
+            safety.close()
+            source.close()
         conn = sqlite3.connect(str(db_path), timeout=30)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -269,10 +280,13 @@ def main() -> int:
             after = snapshot(conn)
             if before != after:
                 raise RuntimeError(f"Legacy row/financial snapshot changed: {before} != {after}")
-            conn.commit()
             integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
-            if integrity != "ok":
-                raise RuntimeError(f"Post-migration integrity_check failed: {integrity}")
+            fk_issues = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if integrity != "ok" or fk_issues:
+                raise RuntimeError(
+                    f"Post-migration validation failed: integrity={integrity}, foreign_keys={len(fk_issues)}"
+                )
+            conn.commit()
             print(json.dumps({
                 "result": outcome,
                 "pre_migration_snapshot": before,
