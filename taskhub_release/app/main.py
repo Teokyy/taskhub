@@ -230,6 +230,38 @@ class TaskIn(BaseModel):
         return self
 
 
+
+class CategoryCreateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=80)
+    parent_id: int | None = None
+
+
+class CategoryUpdateIn(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=80)
+    parent_id: int | None = None
+    is_hidden: bool | None = None
+
+
+class CategoryRequestResolveIn(BaseModel):
+    status: str = Field(pattern="^(added|moved|rejected)$")
+    category_id: int | None = None
+    note: str = Field(default="", max_length=1000)
+
+
+class MarketResponseIn(BaseModel):
+    message: str = Field(default="", max_length=1000)
+    proposed_deadline: str | None = Field(default=None, max_length=40)
+
+
+class MarketReviewIn(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    text: str = Field(default="", max_length=500)
+
+
+class MarketDisputeIn(BaseModel):
+    reason: str = Field(min_length=5, max_length=2000)
+
+
 class MarketServiceIn(BaseModel):
     title: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=10000)
@@ -1192,6 +1224,104 @@ def team(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-D
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+
+@app.get("/api/categories")
+def get_categories(include_hidden: bool = False, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    if include_hidden:
+        admin(account)
+    with connect() as conn:
+        rows = conn.execute("""SELECT p.id,p.name,p.is_hidden,
+            c.id child_id,c.name child_name,c.is_hidden child_hidden
+            FROM categories p LEFT JOIN categories c ON c.parent_id=p.id
+            WHERE p.parent_id IS NULL AND (?=1 OR p.is_hidden=0)
+              AND (c.id IS NULL OR ?=1 OR c.is_hidden=0)
+            ORDER BY p.id,c.id""", (int(include_hidden),int(include_hidden))).fetchall()
+    result=[]
+    for row in rows:
+        parent=next((x for x in result if x["id"]==row["id"]),None)
+        if parent is None:
+            parent={"id":row["id"],"name":row["name"],"is_hidden":bool(row["is_hidden"]),"children":[]}
+            result.append(parent)
+        if row["child_id"] is not None:
+            parent["children"].append({"id":row["child_id"],"name":row["child_name"],"is_hidden":bool(row["child_hidden"])})
+    return result
+
+
+@app.post("/api/categories")
+def create_category(data: CategoryCreateIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data);admin(account)
+    name=data.name.strip()
+    with connect() as conn:
+        if data.parent_id is not None:
+            parent=conn.execute("SELECT id,parent_id FROM categories WHERE id=?", (data.parent_id,)).fetchone()
+            if not parent or parent["parent_id"] is not None:
+                raise HTTPException(400,"Подкатегория должна принадлежать корневой категории")
+        try:
+            cur=conn.execute("INSERT INTO categories(name,parent_id) VALUES(?,?)",(name,data.parent_id))
+        except Exception as exc:
+            if "UNIQUE" in str(exc): raise HTTPException(409,"Такая категория уже существует")
+            raise
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"],"create_category","category",cur.lastrowid,f"name={name};parent_id={data.parent_id}"))
+        return dict(conn.execute("SELECT * FROM categories WHERE id=?",(cur.lastrowid,)).fetchone())
+
+
+@app.patch("/api/categories/{category_id}")
+def update_category(category_id: int, data: CategoryUpdateIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data);admin(account)
+    with connect() as conn:
+        category=conn.execute("SELECT * FROM categories WHERE id=?",(category_id,)).fetchone()
+        if not category: raise HTTPException(404,"Категория не найдена")
+        new_parent=category["parent_id"] if data.parent_id is None else data.parent_id
+        if new_parent is not None:
+            parent=conn.execute("SELECT id,parent_id FROM categories WHERE id=?",(new_parent,)).fetchone()
+            if not parent or parent["parent_id"] is not None or new_parent==category_id:
+                raise HTTPException(400,"Допустим только перенос под корневую категорию")
+        if category["parent_id"] is None and conn.execute("SELECT 1 FROM categories WHERE parent_id=? LIMIT 1",(category_id,)).fetchone() and data.parent_id is not None:
+            raise HTTPException(409,"Сначала перенеси или скрой подкатегории")
+        name=(data.name.strip() if data.name is not None else category["name"])
+        hidden=(int(data.is_hidden) if data.is_hidden is not None else category["is_hidden"])
+        try:
+            conn.execute("UPDATE categories SET name=?,parent_id=?,is_hidden=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(name,new_parent,hidden,category_id))
+        except Exception as exc:
+            if "UNIQUE" in str(exc): raise HTTPException(409,"В этой ветке уже есть такая категория")
+            raise
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"],"update_category","category",category_id,f"name={name};parent_id={new_parent};is_hidden={hidden}"))
+        return dict(conn.execute("SELECT * FROM categories WHERE id=?",(category_id,)).fetchone())
+
+
+@app.get("/api/category-requests")
+def list_category_requests(status: str = "pending", x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data);admin(account)
+    with connect() as conn:
+        rows=conn.execute("""SELECT r.*,u.first_name requester_name,t.title task_title,
+            c.name resolved_category FROM category_requests r JOIN users u ON u.id=r.user_id
+            JOIN tasks t ON t.id=r.task_id LEFT JOIN categories c ON c.id=r.resolved_category_id
+            WHERE r.status=? ORDER BY r.created_at""",(status,)).fetchall()
+    return [dict(x) for x in rows]
+
+
+@app.post("/api/category-requests/{request_id}/resolve")
+async def resolve_category_request(request_id: int, data: CategoryRequestResolveIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data);admin(account)
+    with connect() as conn:
+        row=conn.execute("SELECT r.*,u.telegram_id,t.title FROM category_requests r JOIN users u ON u.id=r.user_id JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.status='pending'",(request_id,)).fetchone()
+        if not row: raise HTTPException(404,"Заявка не найдена")
+        if data.status in ("added","moved"):
+            if not data.category_id: raise HTTPException(400,"Выбери итоговую категорию")
+            cat=conn.execute("SELECT c.*,p.name parent_name FROM categories c LEFT JOIN categories p ON p.id=c.parent_id WHERE c.id=? AND c.parent_id IS NOT NULL",(data.category_id,)).fetchone()
+            if not cat or cat["is_hidden"]: raise HTTPException(400,"Выбери видимую подкатегорию")
+            conn.execute("UPDATE tasks SET category_id=?,category=? WHERE id=?",(cat["id"],cat["parent_name"]+" / "+cat["name"],row["task_id"]))
+        conn.execute("UPDATE category_requests SET status=?,resolved_category_id=?,moderator_id=?,resolution_note=?,resolved_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (data.status,data.category_id,account["id"],data.note.strip(),request_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"],"resolve_category_request","category_request",request_id,f"{data.status};category_id={data.category_id}"))
+    await notify_telegram(row["telegram_id"],f"📂 Решение по твоей заявке на категорию для задания «{row['title']}»: {data.status}. {data.note}".strip())
+    return {"ok":True,"status":data.status}
 
 
 @app.get("/api/market/profile")
