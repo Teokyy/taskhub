@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app import db, main
+from app import db, main, room_task_actions
 import importlib.util
 
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "scripts" / "migrate_to_rooms.py"
@@ -332,6 +332,51 @@ class RoomApiIntegrationTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(tuple(project_row), (4000, 0))
         self.assertEqual(tuple(pending), ("pending", 0))
+
+
+
+    def test_executor_refusal_returns_task_without_releasing_budget(self):
+        owner = self.headers("owner-token")
+        worker = self.headers("worker-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        self.client.put(f"/api/rooms/{room_id}/mode", headers=owner,
+                        json={"mode": "customer"})
+        self.client.put(f"/api/rooms/{room_id}/mode", headers=worker,
+                        json={"mode": "executor"})
+        task = self.client.post(
+            f"/api/rooms/{room_id}/tasks", headers=owner,
+            json={"title": "Refusable task", "reward_rub": 10,
+                  "pricing_model": "fixed"},
+        ).json()
+        task_id = task["id"]
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/moderate", headers=owner,
+            json={"decision": "approve", "comment": ""},
+        ).status_code, 200)
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/claim", headers=worker
+        ).status_code, 200)
+        with patch.object(room_task_actions, "_account",
+                          return_value=self.accounts["worker-token"]):
+            refused = self.client.post(
+                f"/api/rooms/{room_id}/tasks/{task_id}/refuse", headers=worker
+            )
+        self.assertEqual(refused.status_code, 200, refused.text)
+        with db.connect() as conn:
+            task_row = conn.execute(
+                "SELECT status,assignee_id,budget_reserved_kop FROM tasks WHERE id=?",
+                (task_id,),
+            ).fetchone()
+            room = conn.execute(
+                "SELECT budget_reserved_kop FROM rooms WHERE id=?", (room_id,)
+            ).fetchone()
+            event = conn.execute(
+                "SELECT event_type FROM task_events WHERE task_id=? ORDER BY id DESC LIMIT 1",
+                (task_id,),
+            ).fetchone()
+        self.assertEqual(tuple(task_row), ("available", None, 1000))
+        self.assertEqual(room["budget_reserved_kop"], 1000)
+        self.assertEqual(event["event_type"], "executor_refused")
 
 
 
