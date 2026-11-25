@@ -55,6 +55,7 @@ async def expire_overdue_tasks():
                         await notify_telegram(row["creator_chat"],f"⌛ Срок задачи «{row['title']}» истёк. Статус: не выполнена.")
                         if row["assignee_chat"]:
                             await notify_telegram(row["assignee_chat"],f"⌛ Срок задачи «{row['title']}» истёк. Статус: не выполнена.")
+                        await notify_room(row["room_id"], f"⌛ Срок задачи «{row['title']}» истёк. Статус: не выполнена.")
         except Exception:
             log.exception("TASK_DEADLINE_SWEEP_FAILED")
         await asyncio.sleep(60)
