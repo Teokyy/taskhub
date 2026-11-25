@@ -1393,8 +1393,9 @@ def set_market_subscriptions(data: SubscriptionUpdateIn, x_telegram_init_data: s
     with connect() as conn:
         if ids:
             placeholders=",".join("?" for _ in ids)
-            rows=conn.execute(f"SELECT id,is_hidden FROM categories WHERE id IN ({placeholders})",ids).fetchall()
-            if len(rows)!=len(ids) or any(x["is_hidden"] for x in rows):
+            rows=conn.execute(f"""SELECT c.id,c.is_hidden,COALESCE(p.is_hidden,0) parent_hidden
+                FROM categories c LEFT JOIN categories p ON p.id=c.parent_id WHERE c.id IN ({placeholders})""",ids).fetchall()
+            if len(rows)!=len(ids) or any(x["is_hidden"] or x["parent_hidden"] for x in rows):
                 raise HTTPException(400,"В подписку можно добавить только существующие видимые категории")
         conn.execute("DELETE FROM subscriptions WHERE user_id=?",(account["id"],))
         conn.executemany("INSERT INTO subscriptions(user_id,category_id) VALUES(?,?)",[(account["id"],x) for x in ids])
@@ -1536,6 +1537,8 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
         if task["status"] not in ("open","available","in_progress"):
             raise HTTPException(409, "Это задание больше нельзя редактировать")
         active_deal = task["status"] == "in_progress"
+        if active_deal and data.title.strip() != task["title"]:
+            raise HTTPException(409, "После выбора исполнителя можно менять только описание и срок")
         if active_deal and (reward != task["reward_kop"] or (data.category_id and data.category_id != task["category_id"]) or data.category != task["category"]):
             raise HTTPException(409, "После выбора исполнителя награду и категорию менять нельзя")
         category_label=task["category"]; category_id=task["category_id"]
@@ -1546,7 +1549,11 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
             category_id=category["id"];category_label=category["parent_name"]+" / "+category["name"]
         values={"title":data.title.strip(),"description":data.description.strip(),"category":category_label,
                 "category_id":category_id,"reward_kop":task["reward_kop"] if active_deal else reward,
-                "deadline":data.deadline}
+                "deadline":data.deadline,"pricing_model":task["pricing_model"] if active_deal else data.pricing_model,
+                "norm_minutes":task["norm_minutes"] if active_deal else data.norm_minutes,
+                "difficulty":task["difficulty"] if active_deal else data.difficulty,
+                "urgency":task["urgency"] if active_deal else data.urgency,
+                "fixed_reward_kop":task["fixed_reward_kop"] if active_deal else reward}
         for field,new_value in values.items():
             old_value=task[field]
             if str(old_value or "")!=str(new_value or ""):
@@ -1556,9 +1563,8 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
             pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,updated_at=CURRENT_TIMESTAMP
             WHERE id=? AND created_by=? AND room_id IS NULL""",
             (values["title"],values["description"],values["category"],values["category_id"],values["reward_kop"],values["deadline"],
-             data.pricing_model if not active_deal else task["pricing_model"],data.norm_minutes if not active_deal else task["norm_minutes"],
-             data.difficulty if not active_deal else task["difficulty"],data.urgency if not active_deal else task["urgency"],
-             reward if not active_deal else task["fixed_reward_kop"],task_id,account["id"]))
+             values["pricing_model"],values["norm_minutes"],values["difficulty"],values["urgency"],
+             values["fixed_reward_kop"],task_id,account["id"]))
         if active_deal:
             notify_executor=task["executor_telegram_id"]
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
