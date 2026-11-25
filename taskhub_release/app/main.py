@@ -1784,7 +1784,7 @@ def hide_market_message(message_id: int, x_telegram_init_data: str = Header(defa
             JOIN tasks t ON t.id=r.task_id WHERE m.id=?""",(message_id,)).fetchone()
         if not row or int(account["id"]) not in (int(row["created_by"]),int(row["executor_id"])):
             raise HTTPException(404,"Сообщение не найдено")
-        conn.execute("UPDATE messages SET hidden_for_user_id=? WHERE id=?",(account["id"],message_id))
+        conn.execute("INSERT OR IGNORE INTO message_hides(message_id,user_id) VALUES(?,?)",(message_id,account["id"]))
     return {"ok":True}
 
 
@@ -1869,8 +1869,8 @@ def get_market_messages(chat_id: int, after_id: int = 0, x_telegram_init_data: s
         if not chat or int(account["id"]) not in (int(chat["created_by"]),int(chat["executor_id"])):
             raise HTTPException(404,"Чат не найден")
         rows=conn.execute("""SELECT m.*,u.first_name sender_name FROM messages m JOIN users u ON u.id=m.sender_id
-            WHERE m.chat_id=? AND m.id>? AND (m.hidden_for_user_id IS NULL OR m.hidden_for_user_id<>?)
-            ORDER BY m.id LIMIT 100""",(chat_id,after_id,account["id"])).fetchall()
+            WHERE m.chat_id=? AND m.id>? AND (m.hidden_for_user_id IS NULL OR m.hidden_for_user_id<>?) AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id=m.id AND h.user_id=?)
+            ORDER BY m.id LIMIT 100""",(chat_id,after_id,account["id"],account["id"])).fetchall()
         conn.execute("""UPDATE messages SET read_at=CURRENT_TIMESTAMP WHERE chat_id=? AND sender_id<>? AND read_at IS NULL""",(chat_id,account["id"]))
     return [dict(x) for x in rows]
 
