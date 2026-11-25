@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, model_validator
 from .auth import verify_telegram_init_data
 from .db import connect, init_db
 from .rooms import (RoomError, create_room as create_room_record, list_rooms, set_work_mode as set_room_work_mode, require_admin as require_room_admin, require_member as require_room_member, require_mode as require_room_mode)
+from .room_task_actions import router as room_task_actions_router
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -100,6 +101,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="TaskHub", lifespan=lifespan)
+app.include_router(room_task_actions_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 @app.middleware("http")
