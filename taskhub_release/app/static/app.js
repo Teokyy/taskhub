@@ -62,6 +62,21 @@ async function refreshMe(){
  me=await api('/market/profile');
  if(activeRoom?.id){try{roomBudget=await api('/rooms/'+activeRoom.id+'/budget')}catch{}}
 }
+
+const TASKHUB_THEMES=[{id:'system',label:'Системная'},{id:'dark',label:'Тёмная'},{id:'light',label:'Светлая'}];
+function getTaskhubTheme(){try{return localStorage.getItem('taskhub_theme')||'system'}catch{return 'system'}}
+function applyTaskhubTheme(theme){
+ const value=['system','dark','light'].includes(theme)?theme:'system';
+ try{localStorage.setItem('taskhub_theme',value)}catch{}
+ if(value==='system')document.documentElement.removeAttribute('data-theme');
+ else document.documentElement.setAttribute('data-theme',value);
+ document.querySelectorAll('[data-theme-choice]').forEach(b=>{b.classList.toggle('active',b.dataset.themeChoice===value);b.setAttribute('aria-pressed',String(b.dataset.themeChoice===value))});
+}
+function renderThemeSettings(){
+ const current=getTaskhubTheme();
+ return '<section class="panel"><div class="task-top"><div><b>Оформление</b><div class="muted" style="font-size:12px;margin-top:3px">Выбери внешний вид TaskHub</div></div><span aria-hidden="true">◐</span></div><div class="theme-options">'+TASKHUB_THEMES.map(t=>'<button type="button" class="theme-option '+(t.id===current?'active':'')+'" data-theme-choice="'+t.id+'" aria-pressed="'+(t.id===current)+'">'+t.label+'</button>').join('')+'</div></section>';
+}
+
 function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab))}
 function setTab(next){tab=(next==='home'||next==='mine'||next==='balance')?'profile':next;nav();render()}
 async function toggleWorkMode(){if(!activeRoom?.id)return toast('Сначала выбери рабочую комнату');const next=workMode()==='customer'?'executor':'customer';try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode:next})});activeRoom={...activeRoom,work_mode:next};toast(next==='customer'?'Режим изменён: заказчик':'Режим изменён: исполнитель');render()}catch(e){toast(e.message)}}
@@ -157,6 +172,8 @@ async function render(){
   view.innerHTML='<section class="profile-row" style="margin:8px 2px 18px"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div style="min-width:0;flex:1"><div class="profile-name">'+esc(me.user.first_name||'Участник')+'</div><div class="muted">Пользователь TaskHub</div></div></section><section class="panel balance-card"><div class="task-top"><div><div class="eyebrow">МОЙ БАЛАНС</div><div style="font-size:25px;font-weight:850;margin-top:4px">'+rub(me.balance_kop||0)+'</div></div><button class="btn secondary" id="profile-finance">История</button></div></section><div class="section-head"><h2>Мои задачи</h2><span>'+mine.filter(t=>t.assignee_id===me.user.id).length+' ВСЕГО</span></div><div class="stats"><div class="stat"><small>В работе</small><strong>'+counts.in_progress+'</strong></div><div class="stat"><small>На проверке</small><strong>'+counts.submitted+'</strong></div><div class="stat"><small>На доработке</small><strong>'+counts.revision+'</strong></div><div class="stat"><small>Принято</small><strong>'+counts.accepted+'</strong></div></div><div class="section-head"><h2>Мои задания как заказчика</h2><span>'+mine.filter(t=>t.created_by===me.user.id).length+'</span></div><div id="my-market-tasks">'+(mine.filter(t=>t.created_by===me.user.id).length?mine.filter(t=>t.created_by===me.user.id).map(t=>taskCard(t)).join(''):empty('Ты ещё не размещал задания','Опубликуй первое задание на общей бирже.'))+'</div><div class="section-head"><h2>Команды</h2></div><section class="panel"><p class="muted">'+(rooms.length?'Состоишь в '+rooms.length+' комнатах. Командные настройки доступны отдельно.':'Ты не состоишь в командах. Это никак не ограничивает биржу.')+'</p><button class="btn secondary block" id="profile-rooms">Открыть комнаты</button></section>';
   document.querySelector('#profile-finance').onclick=showFinanceScreen;
   document.querySelector('#profile-rooms').onclick=()=>setTab('room');
+  const profileSettings=document.createElement('div');profileSettings.innerHTML=renderThemeSettings();document.querySelector('#profile-rooms')?.parentElement?.after(profileSettings);
+  profileSettings.querySelectorAll('[data-theme-choice]').forEach(b=>b.onclick=()=>applyTaskhubTheme(b.dataset.themeChoice));
   const notifyButton=document.createElement('button');notifyButton.className='btn secondary block';notifyButton.textContent='Уведомления о новых заданиях';notifyButton.onclick=showMarketNotificationSettings;document.querySelector('#profile-rooms')?.parentElement?.appendChild(notifyButton);
   bindTaskActions();
 }else if(tab==='admin'){
