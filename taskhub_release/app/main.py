@@ -275,7 +275,7 @@ def room_team(room_id: int,
             room_error(error)
         rows = conn.execute(
             """SELECT u.id,u.telegram_id,u.username,u.first_name,u.photo_url,
-                      rm.member_role,rm.work_mode,
+                      rm.room_role,rm.work_mode,
                       COUNT(CASE WHEN t.status='in_progress' THEN 1 END) active_tasks,
                       COUNT(CASE WHEN t.status='submitted' THEN 1 END) submitted_tasks,
                       COALESCE((SELECT SUM(l.amount_kop) FROM ledger l
