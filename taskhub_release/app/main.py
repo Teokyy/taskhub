@@ -127,9 +127,15 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
 @app.middleware("http")
 async def block_legacy_global_api(request, call_next):
-    """After the room migration, never serve unscoped legacy data endpoints."""
+    """Keep room data scoped while allowing the independent public marketplace API."""
     path = request.url.path
-    if path.startswith("/api/") and path not in {"/api/me", "/api/health"} and not path.startswith("/api/rooms"):
+    allowed = {
+        "/api/me", "/api/health", "/api/market/profile",
+        "/api/market/tasks", "/api/market/ledger",
+    }
+    if path.startswith("/api/market/tasks/"):
+        allowed.add(path)
+    if path.startswith("/api/") and path not in allowed and not path.startswith(("/api/rooms", "/api/market/")):
         try:
             with connect() as conn:
                 migrated = conn.execute(
@@ -138,11 +144,10 @@ async def block_legacy_global_api(request, call_next):
         except Exception:
             migrated = False
         if migrated:
-            return JSONResponse(
-                status_code=410,
-                content={"detail": "Глобальный API отключён. Используйте выбранную комнату."},
-            )
+            return JSONResponse(status_code=410, content={"detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи."})
     return await call_next(request)
+
+
 
 
 
@@ -1162,6 +1167,168 @@ def team(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-D
             """
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+@app.get("/api/market/profile")
+def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        balance = conn.execute("SELECT COALESCE(SUM(amount_kop),0) n FROM ledger WHERE user_id=?", (account["id"],)).fetchone()["n"]
+        counts = {r["status"]: r["n"] for r in conn.execute(
+            "SELECT status,COUNT(*) n FROM tasks WHERE assignee_id=? GROUP BY status", (account["id"],)
+        )}
+        created = conn.execute("SELECT COUNT(*) n FROM tasks WHERE created_by=?", (account["id"],)).fetchone()["n"]
+        mine = conn.execute(
+            "SELECT * FROM tasks WHERE created_by=? OR assignee_id=? ORDER BY id DESC LIMIT 100",
+            (account["id"], account["id"]),
+        ).fetchall()
+    return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "tasks": [dict(r) for r in mine]}
+
+
+@app.get("/api/market/ledger")
+def market_ledger(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        balance = conn.execute("SELECT COALESCE(SUM(amount_kop),0) n FROM ledger WHERE user_id=?", (account["id"],)).fetchone()["n"]
+        rows = conn.execute(
+            "SELECT l.*,t.title FROM ledger l LEFT JOIN tasks t ON t.id=l.task_id WHERE l.user_id=? ORDER BY l.id DESC",
+            (account["id"],),
+        ).fetchall()
+    return {"balance_kop": balance, "entries": [dict(r) for r in rows]}
+
+
+@app.get("/api/market/tasks")
+def market_tasks(status: str = "available", x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        if status == "mine":
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE room_id IS NULL AND (created_by=? OR assignee_id=?) ORDER BY id DESC",
+                (account["id"], account["id"]),
+            ).fetchall()
+        elif status == "available":
+            rows = conn.execute(
+                "SELECT t.*,u.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.room_id IS NULL AND t.status='available' AND t.moderation_status='approved' ORDER BY t.id DESC"
+            ).fetchall()
+        else:
+            raise HTTPException(400, "Неизвестный фильтр биржи")
+    return [dict(row) for row in rows]
+
+
+@app.post("/api/market/tasks")
+def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    if not data.title.strip() or not data.category.strip():
+        raise HTTPException(422, "Название и категория обязательны")
+    if data.project_id or data.stage_id or data.tour_id:
+        raise HTTPException(400, "Публичные задания биржи не привязываются к проектам комнаты")
+    reward = task_base_reward(data)
+    with connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO tasks(title,description,category,reward_kop,created_by,deadline,
+               pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,budget_reserved_kop,
+               status,moderation_status,room_id)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+            (data.title.strip(), data.description.strip(), data.category.strip(), reward,
+             account["id"], data.deadline, data.pricing_model, data.norm_minutes,
+             data.difficulty, data.urgency, reward, 0, "available", "approved"),
+        )
+        task_id = cur.lastrowid
+        for pos, item in enumerate(data.criteria):
+            conn.execute(
+                "INSERT INTO task_criteria(task_id,title,weight,critical,position) VALUES(?,?,?,?,?)",
+                (task_id, item.title.strip(), item.weight, int(item.critical), pos),
+            )
+        conn.execute("UPDATE tasks SET criteria_frozen=1 WHERE id=?", (task_id,))
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "publish_market_task", "task", task_id, "public_marketplace"),
+        )
+        return dict(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+
+
+@app.post("/api/market/tasks/{task_id}/claim")
+async def claim_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        task = conn.execute(
+            """SELECT t.*,u.telegram_id creator_telegram_id FROM tasks t
+               LEFT JOIN users u ON u.id=t.created_by
+               WHERE t.id=? AND t.room_id IS NULL AND t.status='available'
+               AND t.moderation_status='approved'""", (task_id,)
+        ).fetchone()
+        if not task:
+            raise HTTPException(409, "Задача уже занята или недоступна")
+        if int(task["created_by"]) == int(account["id"]):
+            raise HTTPException(403, "Нельзя взять собственную задачу")
+        cur = conn.execute(
+            "UPDATE tasks SET status='in_progress',assignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND room_id IS NULL AND status='available'",
+            (account["id"], task_id),
+        )
+        if cur.rowcount != 1:
+            raise HTTPException(409, "Задача уже занята")
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",
+            (account["id"], "claim_market_task", "task", task_id),
+        )
+    await notify_telegram(task["creator_telegram_id"], f"👀 Твою задачу на бирже взяли в работу: «{task['title']}»")
+    return {"ok": True, "status": "in_progress"}
+
+
+@app.post("/api/market/tasks/{task_id}/submit")
+async def submit_market_task(task_id: int, data: SubmitIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        task = conn.execute(
+            "SELECT t.*,u.telegram_id creator_telegram_id FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.id=? AND t.room_id IS NULL AND t.assignee_id=? AND t.status IN ('in_progress','revision')",
+            (task_id, account["id"]),
+        ).fetchone()
+        if not task:
+            raise HTTPException(409, "Нельзя сдать эту задачу")
+        cur = conn.execute("INSERT INTO submissions(task_id,user_id,body) VALUES(?,?,?)", (task_id, account["id"], data.body.strip()))
+        conn.execute("UPDATE tasks SET status='submitted',updated_at=CURRENT_TIMESTAMP WHERE id=? AND room_id IS NULL", (task_id,))
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "submit_market_task", "submission", cur.lastrowid, f"task_id={task_id}"),
+        )
+    await notify_telegram(task["creator_telegram_id"], f"📨 Работа по задаче «{task['title']}» отправлена на проверку.")
+    return {"ok": True, "status": "submitted"}
+
+
+@app.post("/api/market/tasks/{task_id}/review")
+def review_market_task(task_id: int, data: ReviewIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    if data.decision not in ("accept", "revision", "reject"):
+        raise HTTPException(400, "Неизвестное решение")
+    if data.decision in ("revision", "reject") and not data.comment.strip():
+        raise HTTPException(400, "Укажи причину")
+    if data.quality not in QUALITY_FACTORS:
+        raise HTTPException(400, "Неизвестная оценка качества")
+    status = {"accept": "accepted", "revision": "revision", "reject": "rejected"}[data.decision]
+    with connect() as conn:
+        task = conn.execute(
+            "SELECT * FROM tasks WHERE id=? AND room_id IS NULL AND created_by=? AND status='submitted'",
+            (task_id, account["id"]),
+        ).fetchone()
+        if not task:
+            raise HTTPException(404, "Сдача не найдена или принадлежит не тебе")
+        cur = conn.execute(
+            "UPDATE tasks SET status=?,quality_factor=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND room_id IS NULL AND status='submitted'",
+            (status, QUALITY_FACTORS[data.quality], task_id),
+        )
+        if cur.rowcount != 1:
+            raise HTTPException(409, "Работа уже рассмотрена")
+        if data.decision == "accept":
+            amount = int(round(task["reward_kop"] * QUALITY_FACTORS[data.quality]))
+            conn.execute(
+                "INSERT INTO ledger(user_id,task_id,room_id,amount_kop,kind,note) VALUES(?,?,NULL,?,?,?)",
+                (task["assignee_id"], task_id, amount, "task_earning", f"Принято · качество: {data.quality} · {data.comment.strip()}"),
+            )
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "review_market_task", "task", task_id, f"quality={data.quality};{data.comment.strip()}"),
+        )
+    return {"ok": True, "status": status}
 
 
 @app.get("/api/tasks")
