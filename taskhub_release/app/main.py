@@ -1196,6 +1196,10 @@ def admin(account):
     if account["role"] != "admin":
         raise HTTPException(403, "Только для администратора")
 
+def moderator(account):
+    if account["role"] not in ("admin", "moderator"):
+        raise HTTPException(403, "Только для модератора")
+
 
 def task_base_reward(data: TaskIn) -> int:
     if data.pricing_model == "fixed":
@@ -1308,7 +1312,7 @@ def team(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-D
 def get_categories(include_hidden: bool = False, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     if include_hidden:
-        admin(account)
+        moderator(account)
     with connect() as conn:
         rows = conn.execute("""SELECT p.id,p.name,p.is_hidden,
             c.id child_id,c.name child_name,c.is_hidden child_hidden
@@ -1329,7 +1333,7 @@ def get_categories(include_hidden: bool = False, x_telegram_init_data: str = Hea
 
 @app.post("/api/categories")
 def create_category(data: CategoryCreateIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data);admin(account)
+    account=user(x_telegram_init_data);moderator(account)
     name=data.name.strip()
     with connect() as conn:
         if data.parent_id is not None:
@@ -1350,7 +1354,7 @@ def create_category(data: CategoryCreateIn, x_telegram_init_data: str = Header(d
 
 @app.patch("/api/categories/{category_id}")
 def update_category(category_id: int, data: CategoryUpdateIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data);admin(account)
+    account=user(x_telegram_init_data);moderator(account)
     with connect() as conn:
         category=conn.execute("SELECT * FROM categories WHERE id=?",(category_id,)).fetchone()
         if not category: raise HTTPException(404,"Категория не найдена")
@@ -1382,7 +1386,7 @@ def update_category(category_id: int, data: CategoryUpdateIn, x_telegram_init_da
 
 @app.get("/api/category-requests")
 def list_category_requests(status: str = "pending", x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data);admin(account)
+    account=user(x_telegram_init_data);moderator(account)
     with connect() as conn:
         rows=conn.execute("""SELECT r.*,u.first_name requester_name,t.title task_title,
             c.name resolved_category FROM category_requests r JOIN users u ON u.id=r.user_id
@@ -1393,7 +1397,7 @@ def list_category_requests(status: str = "pending", x_telegram_init_data: str = 
 
 @app.post("/api/category-requests/{request_id}/resolve")
 async def resolve_category_request(request_id: int, data: CategoryRequestResolveIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data);admin(account)
+    account=user(x_telegram_init_data);moderator(account)
     with connect() as conn:
         row=conn.execute("SELECT r.*,u.telegram_id,t.title FROM category_requests r JOIN users u ON u.id=r.user_id JOIN tasks t ON t.id=r.task_id WHERE r.id=? AND r.status='pending'",(request_id,)).fetchone()
         if not row: raise HTTPException(404,"Заявка не найдена")
@@ -1794,7 +1798,7 @@ def hide_market_message(message_id: int, x_telegram_init_data: str = Header(defa
 
 @app.get("/api/moderation/disputes")
 def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data);admin(account)
+    account=user(x_telegram_init_data);moderator(account)
     with connect() as conn:
         rows=conn.execute("""SELECT d.*,t.title,t.status task_status,
             opener.first_name opened_by_name,customer.first_name customer_name,executor.first_name executor_name
@@ -1808,7 +1812,7 @@ def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-T
 
 @app.post("/api/moderation/disputes/{dispute_id}/resolve")
 async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data);admin(account)
+    account=user(x_telegram_init_data);moderator(account)
     with connect() as conn:
         row=conn.execute("""SELECT d.*,t.title,t.status task_status,t.created_by,
             owner.telegram_id owner_telegram_id,r.executor_id,executor.telegram_id executor_telegram_id
@@ -1842,7 +1846,7 @@ async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_t
 
 @app.get("/api/moderation/disputes/{dispute_id}/chat")
 def moderator_dispute_chat(dispute_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data);admin(account)
+    account=user(x_telegram_init_data);moderator(account)
     with connect() as conn:
         dispute=conn.execute("SELECT task_id FROM disputes WHERE id=?",(dispute_id,)).fetchone()
         if not dispute: raise HTTPException(404,"Жалоба не найдена")
