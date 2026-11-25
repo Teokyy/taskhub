@@ -130,8 +130,8 @@ function taskCard(t,adminView=false){
   else action='<button class="btn secondary" data-view-responses="'+t.id+'">Отклики</button><button class="btn secondary" data-edit-market="'+t.id+'">Редактировать</button><button class="btn danger" data-delete-market="'+t.id+'">Снять с публикации</button>';
  }
  if(marketTask&&t.status==='in_progress'){
-  if(own)action='<button class="btn" data-complete-market="'+t.id+'">Подтвердить выполнение</button><button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button>';
-  if(executor)action='<button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button>';
+  if(own)action='<button class="btn" data-complete-market="'+t.id+'">Подтвердить выполнение</button><button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button><button class="btn danger" data-cancel-deal="'+t.id+'">Запросить отмену</button>';
+  if(executor)action='<button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button><button class="btn danger" data-cancel-deal="'+t.id+'">Запросить отмену</button>';
   if(own||executor)action+='<button class="btn danger" data-dispute-market="'+t.id+'">Пожаловаться</button>';
  }
  if(marketTask&&t.status==='done'&&(own||executor))action='<button class="btn secondary" data-review-task="'+t.id+'">Оставить отзыв</button>';
@@ -150,6 +150,7 @@ function bindTaskActions(){
  view.querySelectorAll('[data-market-response]').forEach(b=>b.onclick=()=>createMarketResponse(b.dataset.marketResponse));
  view.querySelectorAll('[data-view-responses]').forEach(b=>b.onclick=()=>showMarketResponses(b.dataset.viewResponses));
  view.querySelectorAll('[data-complete-market]').forEach(b=>b.onclick=()=>completeMarketTask(b.dataset.completeMarket));
+ view.querySelectorAll('[data-cancel-deal]').forEach(b=>b.onclick=()=>requestDealCancellation(b.dataset.cancelDeal));
  view.querySelectorAll('[data-open-deal-chat]').forEach(b=>b.onclick=()=>showDealChatByTask(b.dataset.openDealChat));
  view.querySelectorAll('[data-dispute-market]').forEach(b=>b.onclick=()=>createMarketDispute(b.dataset.disputeMarket));
  view.querySelectorAll('[data-review-task]').forEach(b=>b.onclick=()=>createMarketReview(b.dataset.reviewTask));
@@ -168,6 +169,7 @@ async function showMarketResponses(taskId){
  view.querySelectorAll('[data-accept-response]').forEach(b=>b.onclick=async()=>{try{await api('/market/responses/'+b.dataset.acceptResponse+'/accept',{method:'POST'});toast('Исполнитель выбран, чат открыт');await setTab('profile')}catch(e){toast(e.message)}});
  }catch(e){toast(e.message)}
 }
+async function requestDealCancellation(id){if(!confirm('Отправить второй стороне запрос на взаимную отмену? Сделка закроется только после согласия обоих.'))return;try{const r=await api('/market/tasks/'+id+'/cancel-request',{method:'POST'});toast(r.status==='cancelled'?'Сделка отменена по взаимному согласию':'Запрос отправлен второй стороне');await render()}catch(e){toast(e.message)}}
 async function completeMarketTask(id){if(!confirm('Подтвердить выполнение задания?'))return;try{await api('/market/tasks/'+id+'/complete',{method:'POST'});toast('Сделка завершена');await render()}catch(e){toast(e.message)}}
 async function createMarketDispute(id){const reason=prompt('Опиши проблему по сделке');if(!reason)return;try{await api('/market/tasks/'+id+'/disputes',{method:'POST',body:JSON.stringify({reason})});toast('Жалоба отправлена модератору');await render()}catch(e){toast(e.message)}}
 async function createMarketReview(id){const rating=Number(prompt('Оценка от 1 до 5','5'));if(!Number.isInteger(rating)||rating<1||rating>5)return toast('Оценка должна быть от 1 до 5');const text=prompt('Короткий отзыв (необязательно)','')||'';try{await api('/market/tasks/'+id+'/reviews',{method:'POST',body:JSON.stringify({rating,text})});toast('Отзыв сохранён')}catch(e){toast(e.message)}}
