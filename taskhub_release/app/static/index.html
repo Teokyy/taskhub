@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#101310">
   <title>TaskHub — пространство для команды</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <script id="taskhub-theme-bootstrap">(function(){try{var t=localStorage.getItem("taskhub_theme")||"system";if(t!=="system")document.documentElement.setAttribute("data-theme",t)}catch(e){}})();</script>
   <style>
     :root{color-scheme:dark;--bg:#101310;--panel:#191e19;--panel2:#202720;--line:#303a30;--text:#f1f3eb;--muted:#9ba497;--lime:#c7f36b;--lime-ink:#17200c;--red:#ff8278;--radius:20px}
     *{box-sizing:border-box}
@@ -132,7 +133,46 @@
     .balance-card .eyebrow,.balance-card .muted{color:#38512b}
     .balance-card .btn.secondary{background:#294323;border-color:#294323;color:#efffe6}
     @media(max-width:370px){.nav-inner{gap:3px}.nav button{font-size:10px;padding-left:2px;padding-right:2px}}
-\n  </style>
+\n
+/* Light theme */
+:root[data-theme="light"]{color-scheme:light;--bg:#f4f6f2;--panel:#fff;--panel2:#edf1e9;--line:#dce3d7;--text:#20271e;--muted:#687365;--lime:#75bd48;--lime-ink:#10200a}
+:root[data-theme="light"] html,:root[data-theme="light"] body{background:#f4f6f2!important;color:#20271e}
+:root[data-theme="light"] body{background:radial-gradient(ellipse at 90% -15%,#e3efda 0,transparent 42%),var(--bg)!important}
+:root[data-theme="light"] .panel,:root[data-theme="light"] .stat,:root[data-theme="light"] .empty{background:#fff!important;border-color:#dce3d7!important;color:#20271e}
+:root[data-theme="light"] .task p,:root[data-theme="light"] .muted,:root[data-theme="light"] label{color:#687365}
+:root[data-theme="light"] .pill{background:#edf6e8!important;color:#416c2c!important;border-color:#d4e7c9!important}
+:root[data-theme="light"] .btn.secondary{background:#edf3e9!important;border-color:#d4dfcd!important;color:#263322!important}
+:root[data-theme="light"] .btn.ghost{color:#64715f!important}
+:root[data-theme="light"] .btn.danger{background:#fbe9e7!important;color:#a53d35!important}
+:root[data-theme="light"] .nav{background:rgba(250,252,248,.96)!important;border-color:#dce3d7!important}
+:root[data-theme="light"] .nav button{color:#657160!important}
+:root[data-theme="light"] .nav button.active{background:#e6f3df!important;border-color:#c5dfb7!important;color:#477c2b!important}
+:root[data-theme="light"] .nav button.active:after{background:#75bd48!important}
+:root[data-theme="light"] .field,:root[data-theme="light"] input.field,:root[data-theme="light"] textarea.field,:root[data-theme="light"] select.field,:root[data-theme="light"] .room-select{background:#fff!important;color:#20271e!important;border-color:#d5dfd0!important}
+:root[data-theme="light"] .filter-chip{background:#fff!important;color:#596653!important;border-color:#dce3d7!important}
+:root[data-theme="light"] .filter-chip.active{background:#e7f4df!important;color:#416f2b!important;border-color:#c4dfb5!important}
+:root[data-theme="light"] .modal-backdrop{background:#24302066!important}
+:root[data-theme="light"] .modal-sheet{background:#fff!important;border-color:#dce3d7!important;color:#20271e!important}
+:root[data-theme="light"] .modal-close{background:#edf3e9!important;color:#263322!important}
+:root[data-theme="light"] .hero{background:#e9f5e1!important;color:#263322!important;border-color:#d0e5c4!important}
+:root[data-theme="light"] .hero .eyebrow,:root[data-theme="light"] .hero-foot{color:#607653!important}
+:root[data-theme="light"] .big-avatar{background:#e4f1dc!important;color:#548b35!important}
+:root[data-theme="light"] .positive{color:#548b35!important}
+:root[data-theme="light"] .ledger-row{border-color:#e3e9df!important}
+:root[data-theme="light"] .toast{background:#263322!important;color:#f3faee!important}
+:root[data-theme="light"] .balance-card{background:#9be66b!important;color:#14200e!important;border-color:#8bd65d!important}
+:root[data-theme="light"] .balance-card .eyebrow,:root[data-theme="light"] .balance-card .muted{color:#38512b!important}
+:root[data-theme="light"] .balance-card .btn.secondary{background:#294323!important;border-color:#294323!important;color:#efffe6!important}
+:root[data-theme="light"] .brand{color:#20271e!important}
+:root[data-theme="light"] .brand span,:root[data-theme="light"] .brand .brand-dot{color:#75bd48!important}
+:root[data-theme="light"] .avatar{background:#e9f1e4!important;color:#477c2b!important;border-color:#d2dfca!important}
+:root[data-theme="light"] .divider{background:#dce3d7!important}
+:root[data-theme="light"] .eyebrow{color:#687365!important}
+.theme-options{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.theme-option{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:13px;padding:12px 6px;font-weight:750;font-size:13px}
+.theme-option.active{border-color:var(--lime);background:color-mix(in srgb,var(--lime) 17%,var(--panel));color:var(--text);box-shadow:0 0 0 1px var(--lime) inset}
+
+  </style>
 </head>
 <body>
   <div class="shell">
@@ -145,7 +185,7 @@
     <button data-tab="profile"><span class="ico">◉</span>Профиль</button>
   </div></nav>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=19"></script>
+  <script src="/static/app.js?v=20"></script>
   <script src="/static/budget.js?v=2"></script>
   <script>
     document.addEventListener('click', async event => {
