@@ -36,7 +36,7 @@ async def expire_overdue_tasks():
     while True:
         try:
             with connect() as conn:
-                rows=conn.execute("""SELECT t.id,t.title,u.telegram_id assignee_chat,c.telegram_id creator_chat
+                rows=conn.execute("""SELECT t.id,t.room_id,t.title,u.telegram_id assignee_chat,c.telegram_id creator_chat
                     FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
                     LEFT JOIN users c ON c.id=t.created_by
                     WHERE t.deadline IS NOT NULL AND date(t.deadline)<date('now')
@@ -45,6 +45,8 @@ async def expire_overdue_tasks():
                     cur=conn.execute("""UPDATE tasks SET status='not_completed',updated_at=CURRENT_TIMESTAMP
                         WHERE id=? AND status IN ('available','in_progress','revision')""",(row["id"],))
                     if cur.rowcount:
+                        if row["room_id"] is not None:
+                            release_task(conn, row["room_id"], row["id"], None, "released")
                         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(NULL,?,?,?,?)",
                             ("deadline_expired","task",row["id"],"Срок выполнения истёк"))
                         await notify_telegram(row["creator_chat"],f"⌛ Срок задачи «{row['title']}» истёк. Статус: не выполнена.")
