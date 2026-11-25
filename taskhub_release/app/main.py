@@ -199,7 +199,9 @@ class StageIn(BaseModel):
 class TaskIn(BaseModel):
     title: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=10000)
-    category: str = Field(default="Другое", min_length=1, max_length=60)
+    category: str = Field(default="Другое", min_length=1, max_length=120)
+    category_id: int | None = None
+    other_category_text: str | None = Field(default=None, max_length=200)
     reward_rub: int | None = Field(default=None, ge=0, le=1000000)
     pricing_model: str = Field(default="fixed")
     norm_minutes: int = Field(default=0, ge=0, le=100000)
@@ -1363,7 +1365,7 @@ def market_tasks(status: str = "available", x_telegram_init_data: str = Header(d
             ).fetchall()
         elif status == "available":
             rows = conn.execute(
-                "SELECT t.*,u.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.room_id IS NULL AND t.status='available' AND t.moderation_status='approved' ORDER BY t.id DESC"
+                "SELECT t.*,u.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.room_id IS NULL AND t.status IN ('open','available') AND t.moderation_status='approved' ORDER BY t.id DESC"
             ).fetchall()
         else:
             raise HTTPException(400, "Неизвестный фильтр биржи")
@@ -1373,22 +1375,40 @@ def market_tasks(status: str = "available", x_telegram_init_data: str = Header(d
 @app.post("/api/market/tasks")
 async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
-    if not data.title.strip() or not data.category.strip():
-        raise HTTPException(422, "Название и категория обязательны")
+    if not data.title.strip():
+        raise HTTPException(422, "Название задания обязательно")
+    if not data.category_id and not data.category.strip():
+        raise HTTPException(422, "Выбери категорию из списка")
     if data.project_id or data.stage_id or data.tour_id:
         raise HTTPException(400, "Публичные задания биржи не привязываются к проектам комнаты")
     reward = task_base_reward(data)
     with connect() as conn:
+        category_label=data.category.strip()
+        category_id=None
+        if data.category_id:
+            category=conn.execute("""SELECT c.*,p.name parent_name FROM categories c
+                JOIN categories p ON p.id=c.parent_id WHERE c.id=? AND c.is_hidden=0 AND p.is_hidden=0""",(data.category_id,)).fetchone()
+            if not category:
+                raise HTTPException(400,"Выбери доступную подкатегорию")
+            category_id=category["id"]
+            category_label=category["parent_name"]+" / "+category["name"]
+        else:
+            raise HTTPException(400,"Необходимо выбрать подкатегорию из дерева категорий")
+        if category_label=="Другое / Прочее" and not (data.other_category_text or "").strip():
+            raise HTTPException(422,"Опиши, какая услуга нужна (до 200 символов)")
         cur = conn.execute(
-            """INSERT INTO tasks(title,description,category,reward_kop,created_by,deadline,
+            """INSERT INTO tasks(title,description,category,category_id,reward_kop,created_by,author_id,deadline,
                pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,budget_reserved_kop,
                status,moderation_status,room_id)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
-            (data.title.strip(), data.description.strip(), data.category.strip(), reward,
-             account["id"], data.deadline, data.pricing_model, data.norm_minutes,
-             data.difficulty, data.urgency, reward, 0, "available", "approved"),
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+            (data.title.strip(), data.description.strip(), category_label, category_id, reward,
+             account["id"], account["id"], data.deadline, data.pricing_model, data.norm_minutes,
+             data.difficulty, data.urgency, reward, 0, "open", "approved"),
         )
         task_id = cur.lastrowid
+        if category_label=="Другое / Прочее":
+            conn.execute("INSERT INTO category_requests(user_id,task_id,text) VALUES(?,?,?)",
+                         (account["id"],task_id,(data.other_category_text or "").strip()))
         for pos, item in enumerate(data.criteria):
             conn.execute(
                 "INSERT INTO task_criteria(task_id,title,weight,critical,position) VALUES(?,?,?,?,?)",
@@ -1540,6 +1560,168 @@ async def update_market_service_order(order_id: int, data: MarketServiceOrderSta
     recipient = order["buyer_telegram_id"] if int(order["seller_id"]) == int(account["id"]) else order["seller_telegram_id"]
     await notify_telegram(recipient, f"📦 Заказ услуги «{order['service_title']}» #{order_id}: статус «{data.status}».")
     return {"ok": True, "status": data.status}
+
+
+
+@app.get("/api/market/tasks/{task_id}/responses")
+def list_market_responses(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        task=conn.execute("SELECT * FROM tasks WHERE id=? AND room_id IS NULL",(task_id,)).fetchone()
+        if not task: raise HTTPException(404,"Задание не найдено")
+        if int(task["created_by"])==int(account["id"]):
+            rows=conn.execute("SELECT r.*,u.first_name executor_name,u.username executor_username FROM responses r JOIN users u ON u.id=r.executor_id WHERE r.task_id=? ORDER BY r.created_at",(task_id,)).fetchall()
+        else:
+            rows=conn.execute("SELECT r.* FROM responses r WHERE r.task_id=? AND r.executor_id=?",(task_id,account["id"])).fetchall()
+    return [dict(x) for x in rows]
+
+
+@app.post("/api/market/tasks/{task_id}/responses")
+async def create_market_response(task_id: int, data: MarketResponseIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        task=conn.execute("SELECT t.*,u.telegram_id owner_telegram_id FROM tasks t JOIN users u ON u.id=t.created_by WHERE t.id=? AND t.room_id IS NULL AND t.status='open' AND t.moderation_status='approved'",(task_id,)).fetchone()
+        if not task: raise HTTPException(409,"Задание уже недоступно для откликов")
+        if int(task["created_by"])==int(account["id"]): raise HTTPException(403,"Нельзя откликнуться на своё задание")
+        try:
+            cur=conn.execute("INSERT INTO responses(task_id,executor_id,message,proposed_deadline) VALUES(?,?,?,?)",(task_id,account["id"],data.message.strip(),data.proposed_deadline))
+        except Exception as exc:
+            if "UNIQUE" in str(exc): raise HTTPException(409,"Ты уже откликался на это задание")
+            raise
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"create_response","response",cur.lastrowid,f"task_id={task_id}"))
+    await notify_telegram(task["owner_telegram_id"],f"✉️ Новый отклик на задание «{task['title']}»")
+    return {"id":cur.lastrowid,"status":"sent"}
+
+
+@app.post("/api/market/responses/{response_id}/withdraw")
+def withdraw_market_response(response_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        row=conn.execute("SELECT * FROM responses WHERE id=? AND executor_id=? AND status='sent'",(response_id,account["id"])).fetchone()
+        if not row: raise HTTPException(404,"Отклик нельзя отозвать")
+        conn.execute("UPDATE responses SET status='withdrawn',updated_at=CURRENT_TIMESTAMP WHERE id=?",(response_id,))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"withdraw_response","response",response_id))
+    return {"ok":True,"status":"withdrawn"}
+
+
+@app.post("/api/market/responses/{response_id}/accept")
+async def accept_market_response(response_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        row=conn.execute("""SELECT r.*,t.id task_id,t.title,t.created_by,t.status task_status,
+            u.telegram_id executor_telegram_id FROM responses r JOIN tasks t ON t.id=r.task_id
+            JOIN users u ON u.id=r.executor_id WHERE r.id=? AND t.room_id IS NULL""",(response_id,)).fetchone()
+        if not row or int(row["created_by"])!=int(account["id"]): raise HTTPException(404,"Отклик не найден")
+        if row["task_status"]!="open" or row["status"]!="sent": raise HTTPException(409,"Задание или отклик уже обработаны")
+        conn.execute("UPDATE responses SET status='accepted',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='sent'",(response_id,))
+        conn.execute("UPDATE responses SET status='rejected',updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND id<>? AND status='sent'",(row["task_id"],response_id))
+        conn.execute("UPDATE tasks SET status='in_progress',assignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='open'",(row["executor_id"],row["task_id"]))
+        cur=conn.execute("INSERT INTO chats(response_id) VALUES(?)",(response_id,))
+        chat_id=cur.lastrowid
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"accept_response","response",response_id,f"chat_id={chat_id}"))
+    await notify_telegram(row["executor_telegram_id"],f"✅ Твой отклик принят: «{row['title']}». Чат с заказчиком открыт.")
+    return {"ok":True,"chat_id":chat_id,"status":"in_progress"}
+
+
+@app.get("/api/market/chats")
+def list_market_chats(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        rows=conn.execute("""SELECT c.id chat_id,c.created_at,c.closed_at,r.id response_id,t.id task_id,t.title,
+            t.created_by,r.executor_id,owner.first_name customer_name,executor.first_name executor_name
+            FROM chats c JOIN responses r ON r.id=c.response_id JOIN tasks t ON t.id=r.task_id
+            JOIN users owner ON owner.id=t.created_by JOIN users executor ON executor.id=r.executor_id
+            WHERE t.created_by=? OR r.executor_id=? ORDER BY c.id DESC""",(account["id"],account["id"])).fetchall()
+    return [dict(x) for x in rows]
+
+
+@app.get("/api/market/chats/{chat_id}/messages")
+def get_market_messages(chat_id: int, after_id: int = 0, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        chat=conn.execute("""SELECT c.id,t.created_by,r.executor_id FROM chats c
+            JOIN responses r ON r.id=c.response_id JOIN tasks t ON t.id=r.task_id WHERE c.id=?""",(chat_id,)).fetchone()
+        if not chat or int(account["id"]) not in (int(chat["created_by"]),int(chat["executor_id"])):
+            raise HTTPException(404,"Чат не найден")
+        rows=conn.execute("""SELECT m.*,u.first_name sender_name FROM messages m JOIN users u ON u.id=m.sender_id
+            WHERE m.chat_id=? AND m.id>? AND (m.hidden_for_user_id IS NULL OR m.hidden_for_user_id<>?)
+            ORDER BY m.id LIMIT 100""",(chat_id,after_id,account["id"])).fetchall()
+        conn.execute("""UPDATE messages SET read_at=CURRENT_TIMESTAMP WHERE chat_id=? AND sender_id<>? AND read_at IS NULL""",(chat_id,account["id"]))
+    return [dict(x) for x in rows]
+
+
+@app.post("/api/market/chats/{chat_id}/messages")
+async def send_market_message(chat_id: int, data: SubmitIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    message=data.body.strip()
+    if not message or len(message)>2000: raise HTTPException(422,"Сообщение должно быть от 1 до 2000 символов")
+    import re
+    warning=bool(re.search(r"(?:https?://|t\.me/|@[A-Za-z0-9_]{5,}|\+?\d[\d\s()\-]{8,})",message,re.I))
+    with connect() as conn:
+        chat=conn.execute("""SELECT c.id,t.created_by,r.executor_id,t.title,
+            owner.telegram_id owner_telegram_id,executor.telegram_id executor_telegram_id
+            FROM chats c JOIN responses r ON r.id=c.response_id JOIN tasks t ON t.id=r.task_id
+            JOIN users owner ON owner.id=t.created_by JOIN users executor ON executor.id=r.executor_id
+            WHERE c.id=?""",(chat_id,)).fetchone()
+        if not chat or int(account["id"]) not in (int(chat["created_by"]),int(chat["executor_id"])):
+            raise HTTPException(404,"Чат не найден")
+        cur=conn.execute("INSERT INTO messages(chat_id,sender_id,text) VALUES(?,?,?)",(chat_id,account["id"],message))
+        recipient_id=chat["executor_id"] if int(account["id"])==int(chat["created_by"]) else chat["created_by"]
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"send_chat_message","chat",chat_id,f"message_id={cur.lastrowid}"))
+    # Event delivery is handled by Telegram; later the online-presence worker can suppress it.
+    recipient_telegram=chat["executor_telegram_id"] if int(account["id"])==int(chat["created_by"]) else chat["owner_telegram_id"]
+    await notify_telegram(recipient_telegram,f"💬 Новое сообщение по заданию «{chat['title']}»")
+    return {"id":cur.lastrowid,"warning_external_contact":warning}
+
+
+@app.post("/api/market/tasks/{task_id}/complete")
+async def complete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        task=conn.execute("""SELECT t.*,r.id response_id,u.telegram_id executor_telegram_id
+            FROM tasks t JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            JOIN users u ON u.id=r.executor_id WHERE t.id=? AND t.created_by=? AND t.room_id IS NULL AND t.status='in_progress'""",(task_id,account["id"])).fetchone()
+        if not task: raise HTTPException(404,"Активная сделка не найдена")
+        conn.execute("UPDATE tasks SET status='done',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,))
+        conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id=?",(task["response_id"],))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"complete_market_task","task",task_id))
+    await notify_telegram(task["executor_telegram_id"],f"🎉 Заказчик подтвердил выполнение «{task['title']}». Оставьте отзыв друг другу.")
+    return {"ok":True,"status":"done"}
+
+
+@app.post("/api/market/tasks/{task_id}/reviews")
+def create_market_review(task_id: int, data: MarketReviewIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        task=conn.execute("""SELECT t.created_by,r.executor_id,t.status FROM tasks t
+            JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE t.id=? AND t.room_id IS NULL""",(task_id,)).fetchone()
+        if not task or task["status"]!="done": raise HTTPException(409,"Отзыв доступен после завершения сделки")
+        if int(account["id"])==int(task["created_by"]): target=task["executor_id"]
+        elif int(account["id"])==int(task["executor_id"]): target=task["created_by"]
+        else: raise HTTPException(403,"Оставить отзыв могут только участники сделки")
+        try:
+            cur=conn.execute("INSERT INTO reviews(task_id,author_id,target_id,rating,text) VALUES(?,?,?,?,?)",(task_id,account["id"],target,data.rating,data.text.strip()))
+        except Exception as exc:
+            if "UNIQUE" in str(exc): raise HTTPException(409,"Ты уже оставил отзыв по этой сделке")
+            raise
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"create_review","review",cur.lastrowid))
+    return {"ok":True,"id":cur.lastrowid}
+
+
+@app.post("/api/market/tasks/{task_id}/disputes")
+def create_market_dispute(task_id: int, data: MarketDisputeIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        task=conn.execute("""SELECT t.*,r.executor_id FROM tasks t JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE t.id=? AND t.room_id IS NULL""",(task_id,)).fetchone()
+        if not task or int(account["id"]) not in (int(task["created_by"]),int(task["executor_id"])):
+            raise HTTPException(404,"Сделка не найдена")
+        if task["status"] not in ("in_progress","done"): raise HTTPException(409,"Жалоба недоступна для этого статуса")
+        conn.execute("INSERT INTO disputes(task_id,user_id,reason,status) VALUES(?,?,?,'open')",(task_id,account["id"],data.reason.strip()))
+        conn.execute("UPDATE tasks SET status='disputed',dispute_status='open',updated_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"open_dispute","task",task_id,data.reason.strip()))
+    return {"ok":True,"status":"disputed"}
 
 
 @app.post("/api/market/tasks/{task_id}/claim")
