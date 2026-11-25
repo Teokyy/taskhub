@@ -92,12 +92,28 @@
     .filter-chip{border:1px solid #343a34;background:#191c19;color:#aeb4ad;border-radius:99px;padding:8px 12px;font-size:12px;white-space:nowrap}
     .filter-chip.active{background:#2a302a;color:#f1f2ef;border-color:#566052}
     .task .actions{justify-content:flex-end}
+    /* Restore the original green brand accent */
+    :root{--lime:#a6e86b;--lime-ink:#14200d}
+    .brand span{color:var(--lime)!important}
+    .brand{color:var(--text)}
+    .btn:not(.secondary):not(.ghost):not(.danger){background:var(--lime);color:var(--lime-ink);box-shadow:0 4px 16px #a6e86b20}
+    .btn:not(.secondary):not(.ghost):not(.danger):active{filter:brightness(.94)}
+    .nav button.active{color:var(--lime);border-color:#405238;background:#263124}
+    .pill{background:#283723;color:#c9f49e;border-color:#3b5033}
+    .positive{color:var(--lime)}
+    .filter-chip.active{background:#2b3a25;color:#d0f5a8;border-color:#526b43}
+    .field:focus{border-color:var(--lime);box-shadow:0 0 0 2px #a6e86b20}
+    .avatar{background:#252a25}
+    .big-avatar{background:#293329;color:var(--lime)}
+    .hero{border-color:#40513a}
+    .hero .eyebrow{color:#b7d59b}
+    .toast{background:#e9f5d5;color:#1b2610}
     @media(min-width:600px){body{padding-left:24px;padding-right:24px}}
   </style>
 </head>
 <body>
   <div class="shell">
-    <header class="topbar"><div class="brand">TASK<span>HUB</span><span style="color:var(--text)">.</span></div><div class="topright"><div id="room-switcher" class="room-switcher"></div><button id="avatar" class="avatar" type="button" aria-label="Открыть профиль">T</button></div></header>
+    <header class="topbar"><div class="brand">TASK<span>HUB.</span></div><div class="topright"><div id="room-switcher" class="room-switcher"></div><button id="avatar" class="avatar" type="button" aria-label="Открыть профиль">T</button></div></header>
     <main id="view"><div class="empty">Загружаем рабочее пространство…</div></main>
   </div>
   <nav class="nav" aria-label="Основная навигация"><div class="nav-inner">
