@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+import hashlib
+import secrets
 from datetime import date
 from os import getenv
 from pathlib import Path
@@ -138,6 +141,19 @@ class RoomModeIn(BaseModel):
     mode: str = Field(pattern="^(customer|executor)$")
 
 
+class InviteCreateIn(BaseModel):
+    expires_in_days: int | None = Field(default=7, ge=1, le=30)
+    max_uses: int | None = Field(default=10, ge=1, le=100)
+
+
+class InviteJoinIn(BaseModel):
+    code: str = Field(min_length=20, max_length=100)
+
+
+class MemberRoleIn(BaseModel):
+    room_role: str = Field(pattern="^(admin|member)$")
+
+
 class RoomBudgetIn(BaseModel):
     limit_rub: int | None = Field(default=None, ge=0, le=1000000000)
 
@@ -208,7 +224,7 @@ class ModerationIn(BaseModel):
     comment: str = Field(default="",max_length=2000)
 
 def ensure_rooms_schema(conn):
-    required = {"rooms", "room_members", "room_payout_settings"}
+    required = {"rooms", "room_members", "room_payout_settings", "room_invites"}
     found = {row["name"] for row in conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     )}
@@ -745,6 +761,175 @@ def post_room(data: RoomIn, x_telegram_init_data: str = Header(default="", alias
             return create_room_record(conn, account["id"], data.name)
         except RoomError as error:
             room_error(error)
+
+
+
+@app.post("/api/rooms/{room_id}/invites")
+def create_room_invite(room_id: int, data: InviteCreateIn,
+                       x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        token = secrets.token_urlsafe(24)
+        token_hash = hashlib.sha256(token.encode()).hexdigest()
+        expires_at = None
+        if data.expires_in_days is not None:
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=data.expires_in_days)).isoformat()
+        cur = conn.execute(
+            "INSERT INTO room_invites(room_id,token_hash,created_by,expires_at,max_uses) VALUES(?,?,?,?,?)",
+            (room_id, token_hash, account["id"], expires_at, data.max_uses),
+        )
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "invite_created", "room_invite", cur.lastrowid, f"room_id={room_id}"),
+        )
+        return {"id": cur.lastrowid, "code": token, "expires_at": expires_at, "max_uses": data.max_uses}
+
+
+@app.get("/api/rooms/{room_id}/invites")
+def list_room_invites(room_id: int,
+                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        rows = conn.execute(
+            """SELECT id,expires_at,max_uses,uses_count,revoked_at,created_at
+               FROM room_invites WHERE room_id=? ORDER BY id DESC LIMIT 30""", (room_id,)
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.delete("/api/rooms/{room_id}/invites/{invite_id}")
+def revoke_room_invite(room_id: int, invite_id: int,
+                       x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        cur = conn.execute(
+            "UPDATE room_invites SET revoked_at=CURRENT_TIMESTAMP WHERE id=? AND room_id=? AND revoked_at IS NULL",
+            (invite_id, room_id),
+        )
+        if not cur.rowcount:
+            raise HTTPException(404, "Приглашение не найдено или уже отозвано")
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "invite_revoked", "room_invite", invite_id, f"room_id={room_id}"),
+        )
+        return {"ok": True}
+
+
+@app.post("/api/rooms/join")
+def join_room(data: InviteJoinIn,
+              x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    token_hash = hashlib.sha256(data.code.strip().encode()).hexdigest()
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        conn.execute("BEGIN IMMEDIATE")
+        invite = conn.execute(
+            """SELECT i.*,r.name room_name FROM room_invites i JOIN rooms r ON r.id=i.room_id
+               WHERE i.token_hash=? AND i.revoked_at IS NULL AND r.archived_at IS NULL""",
+            (token_hash,),
+        ).fetchone()
+        if not invite:
+            raise HTTPException(404, "Приглашение не найдено или отозвано")
+        if invite["expires_at"] and datetime.fromisoformat(invite["expires_at"]) <= datetime.now(timezone.utc):
+            raise HTTPException(410, "Срок приглашения истёк")
+        if invite["max_uses"] is not None and invite["uses_count"] >= invite["max_uses"]:
+            raise HTTPException(410, "Лимит использований приглашения исчерпан")
+        member = conn.execute(
+            "SELECT * FROM room_members WHERE room_id=? AND user_id=?", (invite["room_id"], account["id"])
+        ).fetchone()
+        if member and member["left_at"] is None:
+            raise HTTPException(409, "Ты уже состоишь в этой комнате")
+        if member:
+            conn.execute(
+                "UPDATE room_members SET room_role='member',work_mode=NULL,left_at=NULL,joined_at=CURRENT_TIMESTAMP WHERE id=?",
+                (member["id"],),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO room_members(room_id,user_id,room_role,work_mode) VALUES(?,?,'member',NULL)",
+                (invite["room_id"], account["id"]),
+            )
+        conn.execute("UPDATE room_invites SET uses_count=uses_count+1 WHERE id=?", (invite["id"],))
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "invite_joined", "room", invite["room_id"], f"invite_id={invite['id']}"),
+        )
+        return {"room_id": invite["room_id"], "room_name": invite["room_name"], "work_mode": None}
+
+
+@app.patch("/api/rooms/{room_id}/members/{member_user_id}")
+def update_room_member_role(room_id: int, member_user_id: int, data: MemberRoleIn,
+                            x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            actor = require_room_admin(conn, room_id, account["id"])
+            target = require_room_member(conn, room_id, member_user_id)
+        except RoomError as error:
+            room_error(error)
+        if target["room_role"] == "owner":
+            raise HTTPException(409, "Роль владельца нельзя изменить этим действием")
+        if actor["room_role"] != "owner" and (target["room_role"] == "admin" or data.room_role == "admin"):
+            raise HTTPException(403, "Назначать и снимать администраторов может только владелец")
+        conn.execute(
+            "UPDATE room_members SET room_role=? WHERE room_id=? AND user_id=? AND left_at IS NULL",
+            (data.room_role, room_id, member_user_id),
+        )
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "member_role_changed", "room_member", member_user_id,
+             f"room_id={room_id};role={data.room_role}"),
+        )
+        return {"user_id": member_user_id, "room_role": data.room_role}
+
+
+@app.delete("/api/rooms/{room_id}/members/{member_user_id}")
+def remove_room_member(room_id: int, member_user_id: int,
+                       x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            actor = require_room_admin(conn, room_id, account["id"])
+            target = require_room_member(conn, room_id, member_user_id)
+        except RoomError as error:
+            room_error(error)
+        if target["room_role"] == "owner":
+            raise HTTPException(409, "Владельца нельзя удалить из комнаты")
+        if actor["room_role"] != "owner" and target["room_role"] != "member":
+            raise HTTPException(403, "Администратор может удалить только обычного участника")
+        active = conn.execute(
+            """SELECT id FROM tasks WHERE room_id=? AND status IN ('in_progress','revision','submitted')
+               AND (assignee_id=? OR created_by=?) LIMIT 1""",
+            (room_id, member_user_id, member_user_id),
+        ).fetchone()
+        if active:
+            raise HTTPException(409, f"Нельзя удалить участника: сначала закрой активную задачу №{active['id']}")
+        conn.execute(
+            "UPDATE room_members SET left_at=CURRENT_TIMESTAMP WHERE room_id=? AND user_id=? AND left_at IS NULL",
+            (room_id, member_user_id),
+        )
+        conn.execute(
+            "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"], "member_removed", "room_member", member_user_id, f"room_id={room_id}"),
+        )
+        return {"ok": True}
 
 
 @app.put("/api/rooms/{room_id}/mode")
