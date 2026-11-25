@@ -1201,6 +1201,15 @@ def home():
     return FileResponse(ROOT / "static" / "index.html")
 
 
+@app.post("/api/presence")
+def update_user_presence(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        conn.execute("""INSERT INTO user_presence(user_id,last_seen) VALUES(?,CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET last_seen=CURRENT_TIMESTAMP""",(account["id"],))
+    return {"ok":True}
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "TaskHub", "telegram_bot": _bot_status}
@@ -1865,10 +1874,11 @@ async def send_market_message(chat_id: int, data: SubmitIn, x_telegram_init_data
     warning=bool(re.search(r"(?:https?://|t\.me/|@[A-Za-z0-9_]{5,}|\+?\d[\d\s()\-]{8,})",message,re.I))
     with connect() as conn:
         chat=conn.execute("""SELECT c.id,c.closed_at,t.created_by,r.executor_id,t.title,
-            owner.telegram_id owner_telegram_id,executor.telegram_id executor_telegram_id
+            owner.telegram_id owner_telegram_id,executor.telegram_id executor_telegram_id,
+            (SELECT last_seen FROM user_presence WHERE user_id=CASE WHEN ?=t.created_by THEN r.executor_id ELSE t.created_by END) recipient_last_seen
             FROM chats c JOIN responses r ON r.id=c.response_id JOIN tasks t ON t.id=r.task_id
             JOIN users owner ON owner.id=t.created_by JOIN users executor ON executor.id=r.executor_id
-            WHERE c.id=?""",(chat_id,)).fetchone()
+            WHERE c.id=?""",(account["id"],chat_id)).fetchone()
         if not chat or int(account["id"]) not in (int(chat["created_by"]),int(chat["executor_id"])):
             raise HTTPException(404,"Чат не найден")
         if chat["closed_at"]:
@@ -1876,9 +1886,11 @@ async def send_market_message(chat_id: int, data: SubmitIn, x_telegram_init_data
         cur=conn.execute("INSERT INTO messages(chat_id,sender_id,text) VALUES(?,?,?)",(chat_id,account["id"],message))
         recipient_id=chat["executor_id"] if int(account["id"])==int(chat["created_by"]) else chat["created_by"]
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"send_chat_message","chat",chat_id,f"message_id={cur.lastrowid}"))
-    # Event delivery is handled by Telegram; later the online-presence worker can suppress it.
     recipient_telegram=chat["executor_telegram_id"] if int(account["id"])==int(chat["created_by"]) else chat["owner_telegram_id"]
-    await notify_telegram(recipient_telegram,f"💬 Новое сообщение по заданию «{chat['title']}»")
+    last_seen=chat["recipient_last_seen"]
+    is_online=bool(last_seen and (datetime.utcnow()-datetime.strptime(last_seen,"%Y-%m-%d %H:%M:%S")).total_seconds()<600)
+    if not is_online:
+        await notify_telegram(recipient_telegram,f"💬 Новое сообщение по заданию «{chat['title']}»")
     return {"id":cur.lastrowid,"warning_external_contact":warning}
 
 
