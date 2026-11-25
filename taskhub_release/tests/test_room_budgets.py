@@ -66,6 +66,13 @@ class RoomBudgetTests(unittest.TestCase):
         with self.assertRaises(RoomError):
             set_budget_limit(self.conn, 1, 5, 6000)
 
+    def test_budget_history_is_append_only(self):
+        self.conn.execute("INSERT INTO budget_events(room_id,event_type,amount_kop) VALUES(1,'reserved',100)")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("UPDATE budget_events SET amount_kop=0 WHERE id=1")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.conn.execute("DELETE FROM budget_events WHERE id=1")
+
     def test_budget_is_isolated_between_rooms(self):
         reserve_task(self.conn, 2, 12, 5000, 5)
         self.assertEqual(get_budget(self.conn, 1)["reserved_kop"], 0)
