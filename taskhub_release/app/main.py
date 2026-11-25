@@ -283,7 +283,7 @@ def room_team(room_id: int,
                FROM room_members rm JOIN users u ON u.id=rm.user_id
                LEFT JOIN tasks t ON t.room_id=rm.room_id AND
                     (t.assignee_id=u.id OR t.created_by=u.id)
-               WHERE rm.room_id=? AND rm.status='active'
+               WHERE rm.room_id=? AND rm.left_at IS NULL
                GROUP BY u.id,rm.room_id ORDER BY u.first_name,u.id""",
             (room_id,),
         ).fetchall()
