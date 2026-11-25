@@ -1459,7 +1459,7 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
     with connect() as conn:
         balance = conn.execute("SELECT COALESCE(SUM(amount_kop),0) n FROM ledger WHERE user_id=?", (account["id"],)).fetchone()["n"]
         counts = {r["status"]: r["n"] for r in conn.execute(
-            "SELECT status,COUNT(*) n FROM tasks WHERE assignee_id=? GROUP BY status", (account["id"],)
+            "SELECT status,COUNT(*) n FROM tasks WHERE room_id IS NULL AND assignee_id=? GROUP BY status", (account["id"],)
         )}
         created = conn.execute("SELECT COUNT(*) n FROM tasks WHERE room_id IS NULL AND created_by=?", (account["id"],)).fetchone()["n"]
         reputation = conn.execute("SELECT ROUND(AVG(rating),1) average,COUNT(*) review_count FROM reviews WHERE target_id=?", (account["id"],)).fetchone()
@@ -1550,15 +1550,6 @@ async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(de
             (account["id"], "publish_market_task", "task", task_id, "public_marketplace"),
         )
         task_row = dict(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
-        import json
-        subscribers = conn.execute("SELECT u.telegram_id,p.categories FROM market_notification_preferences p JOIN users u ON u.id=p.user_id WHERE p.enabled=1 AND p.user_id<>?", (account["id"],)).fetchall()
-    for subscriber in subscribers:
-        try:
-            subscribed = json.loads(subscriber["categories"] or "[]")
-        except Exception:
-            subscribed = []
-        if any(task_row["category"] == c or task_row["category"].startswith(c + " / ") for c in subscribed):
-            await notify_telegram(subscriber["telegram_id"], f"🆕 Новое задание в категории «{task_row['category']}»: {task_row['title']} · {task_row['reward_kop']/100:.0f} ₽")
     return task_row
 
 
