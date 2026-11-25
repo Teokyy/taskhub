@@ -27,6 +27,29 @@ URGENCY_FACTORS = {1.0, 1.1, 1.25, 1.5}
 QUALITY_FACTORS = {"acceptable": 0.9, "good": 1.0, "excellent": 1.1, "outstanding": 1.2}
 
 
+async def expire_overdue_tasks():
+    while True:
+        try:
+            with connect() as conn:
+                rows=conn.execute("""SELECT t.id,t.title,u.telegram_id assignee_chat,c.telegram_id creator_chat
+                    FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id
+                    LEFT JOIN users c ON c.id=t.created_by
+                    WHERE t.deadline IS NOT NULL AND date(t.deadline)<date('now')
+                    AND t.status IN ('available','in_progress','revision')""").fetchall()
+                for row in rows:
+                    cur=conn.execute("""UPDATE tasks SET status='not_completed',updated_at=CURRENT_TIMESTAMP
+                        WHERE id=? AND status IN ('available','in_progress','revision')""",(row["id"],))
+                    if cur.rowcount:
+                        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(NULL,?,?,?,?)",
+                            ("deadline_expired","task",row["id"],"Срок выполнения истёк"))
+                        await notify_telegram(row["creator_chat"],f"⌛ Срок задачи «{row['title']}» истёк. Статус: не выполнена.")
+                        if row["assignee_chat"]:
+                            await notify_telegram(row["assignee_chat"],f"⌛ Срок задачи «{row['title']}» истёк. Статус: не выполнена.")
+        except Exception:
+            log.exception("TASK_DEADLINE_SWEEP_FAILED")
+        await asyncio.sleep(60)
+
+
 async def notify_telegram(telegram_id: int | None, message: str):
     """Send a best-effort Telegram notification without breaking the task action."""
     if not telegram_id or not _bot:
@@ -50,10 +73,16 @@ async def lifespan(app: FastAPI):
     except Exception:
         _bot_status = "error"
         log.exception("TASKHUB_TELEGRAM_STARTUP_ERROR")
+    expiry_task = asyncio.create_task(expire_overdue_tasks(), name="task-deadline-expiry")
     log.info("TASKHUB_API_STARTED bot_status=%s", _bot_status)
     try:
         yield
     finally:
+        expiry_task.cancel()
+        try:
+            await expiry_task
+        except asyncio.CancelledError:
+            pass
         if _bot_task:
             _bot_task.cancel()
             try:
@@ -295,18 +324,18 @@ def create_task(data:TaskIn,x_telegram_init_data:str=Header(default="",alias="X-
             if reserved+reward>project["budget_kop"]: raise HTTPException(409,"Не хватает бюджета проекта")
         cur=conn.execute(
             """INSERT INTO tasks(title,description,category,reward_kop,created_by,deadline,project_id,stage_id,tour_id,
-            pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,budget_reserved_kop)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,budget_reserved_kop,status,moderation_status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data.title.strip(),data.description.strip(),data.category.strip(),reward,account["id"],data.deadline,
              project["id"] if project else None,stage["id"] if stage else None,data.tour_id,data.pricing_model,
-             data.norm_minutes,data.difficulty,data.urgency,reward,reward)
+             data.norm_minutes,data.difficulty,data.urgency,reward,reward,"pending","pending")
         )
         for pos,item in enumerate(data.criteria):
             conn.execute("INSERT INTO task_criteria(task_id,title,weight,critical,position) VALUES(?,?,?,?,?)",
                          (cur.lastrowid,item.title.strip(),item.weight,int(item.critical),pos))
         conn.execute("UPDATE tasks SET criteria_frozen=1 WHERE id=?",(cur.lastrowid,))
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
-                     (account["id"],"create","task",cur.lastrowid,
+                     (account["id"],"submit_for_moderation","task",cur.lastrowid,
                       f"pricing={data.pricing_model};norm_minutes={data.norm_minutes};difficulty={data.difficulty};urgency={data.urgency};reward_kop={reward}"))
         return dict(conn.execute("SELECT * FROM tasks WHERE id=?",(cur.lastrowid,)).fetchone())
 
@@ -344,6 +373,39 @@ async def submit(task_id:int,data:SubmitIn,x_telegram_init_data:str=Header(defau
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"submit","submission",cur.lastrowid,f"task_id={task_id}"))
     await notify_telegram(task["creator_telegram_id"],f"📨 Работа по твоей задаче отправлена на проверку!\\n\\n«{task['title']}»\\nИсполнитель: {account.get('first_name') or 'Участник'}")
     return {"ok":True}
+
+
+@app.get("/api/moderation")
+def moderation_queue(x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data); admin(account)
+    with connect() as conn:
+        rows=conn.execute("""SELECT t.*,u.first_name creator_name,u.username creator_username
+            FROM tasks t LEFT JOIN users u ON u.id=t.created_by
+            WHERE t.moderation_status='pending' ORDER BY t.created_at""").fetchall()
+    return [dict(row) for row in rows]
+
+
+class ModerationIn(BaseModel):
+    decision: str = Field(pattern="^(approve|reject)$")
+    comment: str = Field(default="",max_length=2000)
+
+
+@app.post("/api/tasks/{task_id}/moderate")
+async def moderate_task(task_id:int,data:ModerationIn,x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data); admin(account)
+    if data.decision=="reject" and not data.comment.strip():
+        raise HTTPException(400,"Укажи причину отклонения")
+    with connect() as conn:
+        task=conn.execute("SELECT t.title,u.telegram_id creator_chat FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.id=? AND t.moderation_status='pending'",(task_id,)).fetchone()
+        if not task: raise HTTPException(404,"Задача не найдена или уже рассмотрена")
+        approved=data.decision=="approve"
+        conn.execute("""UPDATE tasks SET status=?,moderation_status=?,moderation_comment=?,moderated_by=?,moderated_at=CURRENT_TIMESTAMP
+            WHERE id=? AND moderation_status='pending'""",
+            ("available" if approved else "rejected","approved" if approved else "rejected",data.comment.strip(),account["id"],task_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"],"moderation_"+data.decision,"task",task_id,data.comment.strip()))
+    await notify_telegram(task["creator_chat"],("✅ Задача одобрена и опубликована" if approved else "❌ Задача отклонена")+f"\n\n«{task['title']}»"+(f"\nПричина: {data.comment.strip()}" if data.comment.strip() else ""))
+    return {"ok":True,"status":"available" if approved else "rejected"}
 
 
 @app.get("/api/review")
