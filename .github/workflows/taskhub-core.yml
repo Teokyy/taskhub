@@ -1,0 +1,18 @@
+name: TaskHub core checks
+on:
+  push:
+    branches: ["refactor/rooms-core"]
+  pull_request:
+    branches: ["main"]
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile migration utilities
+        run: python -m py_compile taskhub_release/scripts/backup_sqlite.py taskhub_release/scripts/migrate_to_rooms.py
+      - name: Run migration tests
+        run: python -m unittest discover -s taskhub_release/tests -v
