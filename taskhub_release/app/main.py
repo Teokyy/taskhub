@@ -1779,13 +1779,16 @@ async def release_accepted_market_response(response_id: int, x_telegram_init_dat
 def hide_market_message(message_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
     with connect() as conn:
-        row=conn.execute("""SELECT m.id,t.created_by,r.executor_id FROM messages m
+        row=conn.execute("""SELECT m.id,m.sender_id,t.created_by,r.executor_id FROM messages m
             JOIN chats c ON c.id=m.chat_id JOIN responses r ON r.id=c.response_id
             JOIN tasks t ON t.id=r.task_id WHERE m.id=?""",(message_id,)).fetchone()
-        if not row or int(account["id"]) not in (int(row["created_by"]),int(row["executor_id"])):
-            raise HTTPException(404,"Сообщение не найдено")
-        conn.execute("INSERT OR IGNORE INTO message_hides(message_id,user_id) VALUES(?,?)",(message_id,account["id"]))
-    return {"ok":True}
+        if not row or int(row["sender_id"])!=int(account["id"]):
+            raise HTTPException(403,"Скрыть сообщение для собеседника может только его автор")
+        recipient_id=row["executor_id"] if int(row["sender_id"])==int(row["created_by"]) else row["created_by"]
+        conn.execute("INSERT OR IGNORE INTO message_hides(message_id,user_id) VALUES(?,?)",(message_id,recipient_id))
+    return {"ok":True,"hidden_for_user_id":recipient_id}
+
+
 
 
 @app.get("/api/moderation/disputes")
