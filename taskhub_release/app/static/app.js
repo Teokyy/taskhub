@@ -3,7 +3,8 @@ tg?.ready();tg?.expand();
 const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
-let me=null,tab='exchange',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
+const startupParams=new URLSearchParams(window.location.search);
+let me=null,tab=['exchange','profile','chats'].includes(startupParams.get('tab'))?startupParams.get('tab'):'exchange',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
@@ -103,6 +104,7 @@ async function boot(){
   await refreshMe();
   startPresenceHeartbeat();
   await render();
+  if(startupParams.get('action')==='create'&&tab==='exchange')createForm('market');
  }catch(e){
   const web=window.Telegram?.WebApp,data=web?.initData||'';
   const reason=!web?'Telegram WebApp не обнаружен.':!data?'Telegram не передал initData. Открой Mini App через кнопку бота.':'Сервер не принял запрос. Возможно, миграция комнат ещё не включена.';
