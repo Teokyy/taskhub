@@ -319,6 +319,18 @@ class MarketplaceMvpTests(unittest.TestCase):
             headers=self.headers("customer"),
         )
         self.assertEqual(customer_history.json(), [])
+        contact_message = self.client.post(
+            f"/api/market/chats/{chat_id}/messages",
+            headers=self.headers("executor"),
+            json={"body": "Contact: +1 555-123-4567 and demo@example.com"},
+        )
+        self.assertEqual(contact_message.status_code, 200, contact_message.text)
+        visible_to_customer = self.client.get(
+            f"/api/market/chats/{chat_id}/messages",
+            headers=self.headers("customer"),
+        )
+        self.assertIn("[телефон скрыт]", visible_to_customer.json()[0]["text"])
+        self.assertIn("[email скрыт]", visible_to_customer.json()[0]["text"])
         dispute = self.client.post(
             f"/api/market/tasks/{task_id}/disputes",
             headers=self.headers("executor"),
@@ -333,7 +345,8 @@ class MarketplaceMvpTests(unittest.TestCase):
             headers=self.headers("customer"),
         )
         self.assertEqual(transcript.status_code, 200, transcript.text)
-        self.assertEqual(len(transcript.json()), 1)
+        self.assertEqual(len(transcript.json()), 2)
+        self.assertIn("demo@example.com", transcript.json()[1]["text"])
         resolved = self.client.post(
             f"/api/moderation/disputes/{dispute_id}/resolve",
             headers=self.headers("customer"),
