@@ -3,23 +3,81 @@ tg?.ready();tg?.expand();
 const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
-let me=null,tab='home',toastTimer;
+let me=null,tab='home',toastTimer,rooms=[],activeRoom=null;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const isAdmin=()=>me?.user?.role==='admin';
+const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
+const workMode=()=>activeRoom?.work_mode||null;
 function toast(message){const el=document.querySelector('#toast');el.textContent=message;el.hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.hidden=true,2600)}
-async function api(path,opts={}){const r=await fetch('/api'+path,{...opts,headers:{...headers,...opts.headers}});let data={};try{data=await r.json()}catch{}if(!r.ok)throw Error(data.detail||('Ошибка '+r.status));return data}
+function roomApiPath(path,opts={}){
+ if(!activeRoom)return path;
+ const prefix='/rooms/'+activeRoom.id;
+ if(path==='/tasks')return prefix+'/tasks';
+ if(path.startsWith('/tasks?'))return prefix+'/tasks'+path.slice(6);
+ if(path==='/tasks'&&opts.method==='POST')return prefix+'/tasks';
+ let m=path.match(/^\/tasks\/(\d+)\/(claim|submit|moderate|review)$/);
+ if(m)return prefix+'/tasks/'+m[1]+'/'+m[2];
+ if(path==='/moderation')return prefix+'/moderation';
+ if(path==='/review')return prefix+'/review';
+ if(path==='/team')return prefix+'/team';
+ if(path==='/ledger')return prefix+'/ledger';
+ return path;
+}
+async function api(path,opts={}){
+ let target=path;
+ if(path!=='/me'&&path!=='/rooms'&&!path.startsWith('/rooms'))target=roomApiPath(path,opts);
+ const r=await fetch('/api'+target,{...opts,headers:{...headers,...opts.headers}});
+ let data={};try{data=await r.json()}catch{}
+ if(!r.ok)throw Error(data.detail||('Ошибка '+r.status));
+ if(path==='/ledger'&&data&&Array.isArray(data.entries))return data.entries;
+ return data;
+}
+function persistRoom(id){try{sessionStorage.setItem('taskhub_room_id',String(id))}catch{}}
+async function loadRooms(){
+ rooms=await api('/rooms');
+ if(!rooms.length){activeRoom=null;return}
+ let saved=null;try{saved=Number(sessionStorage.getItem('taskhub_room_id'))}catch{}
+ activeRoom=rooms.find(r=>r.id===saved)||rooms[0];persistRoom(activeRoom.id);
+}
+function renderRoomSelector(){
+ const host=document.querySelector('#room-switcher');if(!host)return;
+ if(!rooms.length){host.innerHTML='';return}
+ host.innerHTML='<select id="room-select" class="room-select" aria-label="Рабочая комната">'+rooms.map(r=>'<option value="'+r.id+'" '+(r.id===activeRoom.id?'selected':'')+'>'+esc(r.name)+'</option>').join('')+'</select>';
+ document.querySelector('#room-select').onchange=async e=>{activeRoom=rooms.find(r=>r.id===Number(e.target.value));persistRoom(activeRoom.id);await refreshMe();setTab('home')};
+}
+async function refreshMe(){me=await api('/me');if(activeRoom){const finance=await api('/rooms/'+activeRoom.id+'/ledger');me.balance_kop=finance.balance_kop;const mine=await api('/rooms/'+activeRoom.id+'/tasks?status=mine');me.counts={};mine.forEach(t=>me.counts[t.status]=(me.counts[t.status]||0)+1)}}
 function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab))}
 function setTab(next){tab=next;nav();render()}
 function greeting(){const h=new Date().getHours();return h<6?'Доброй ночи':h<12?'Доброе утро':h<18?'Добрый день':'Добрый вечер'}
 async function boot(){
- try{me=await api('/me');document.querySelector('#avatar').innerHTML=me.user.photo_url?'<img src="'+esc(me.user.photo_url)+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">':esc((me.user.first_name||'T').slice(0,1).toUpperCase());document.querySelector('#role-label').textContent=isAdmin()?'ADMIN SPACE':'TEAM SPACE';await render()}
- catch(e){const web=window.Telegram?.WebApp,data=web?.initData||'';const reason=!web?'Telegram WebApp не обнаружен.':!data?'Telegram не передал initData. Открой Mini App через кнопку бота.':'Сервер не принял Telegram initData. Проверь BOT_TOKEN в Railway.';view.innerHTML='<div class="panel"><div class="eyebrow">SIGN IN REQUIRED</div><h2>Не получилось войти</h2><p class="muted">'+esc(reason)+'</p><p class="muted">'+esc(e.message)+' · initData: '+data.length+' символов</p><button class="btn secondary" onclick="location.reload()">Повторить</button></div>'}
+ try{
+  me=await api('/me');
+  document.querySelector('#avatar').innerHTML=me.user.photo_url?'<img src="'+esc(me.user.photo_url)+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">':esc((me.user.first_name||'T').slice(0,1).toUpperCase());
+  await loadRooms();
+  if(!rooms.length){showRoomOnboarding();return}
+  renderRoomSelector();await refreshMe();
+  document.querySelector('#role-label').textContent=isAdmin()?'ROOM ADMIN':'ROOM MEMBER';
+  await render();
+ }catch(e){
+  const web=window.Telegram?.WebApp,data=web?.initData||'';
+  const reason=!web?'Telegram WebApp не обнаружен.':!data?'Telegram не передал initData. Открой Mini App через кнопку бота.':'Сервер не принял запрос. Возможно, миграция комнат ещё не включена.';
+  view.innerHTML='<div class="panel"><div class="eyebrow">SIGN IN REQUIRED</div><h2>Не получилось загрузить TaskHub</h2><p class="muted">'+esc(reason)+'</p><p class="muted">'+esc(e.message)+' · initData: '+data.length+' символов</p><button class="btn secondary" onclick="location.reload()">Повторить</button></div>';
+ }
 }
+function showRoomOnboarding(){
+ view.innerHTML='<section class="hello"><div class="eyebrow">TASKHUB WORKSPACE</div><h1>Начнём с комнаты</h1><p>Комната — отдельное пространство для команды, задач и выплат.</p></section><div class="panel"><label>Название комнаты</label><input class="field" id="new-room-name" maxlength="80" placeholder="Например, Моя команда"><button class="btn block" id="create-room">Создать комнату</button></div>';
+ document.querySelector('#create-room').onclick=async()=>{const name=document.querySelector('#new-room-name').value.trim();if(!name)return toast('Введи название комнаты');try{await api('/rooms',{method:'POST',body:JSON.stringify({name})});await loadRooms();renderRoomSelector();await refreshMe();showModeSetup()}catch(e){toast(e.message)}};
+}
+function showModeSetup(){
+ view.innerHTML='<section class="hello"><div class="eyebrow">НАСТРОЙКА КОМНАТЫ</div><h1>'+esc(activeRoom?.name||'Комната')+'</h1><p>Выбери, как ты будешь работать в этой комнате. Режим можно изменить позже, когда не останется активных обязательств.</p></section><div class="panel"><button class="btn block" id="mode-customer">Я заказчик — создаю задачи и принимаю работу</button><button class="btn secondary block" style="margin-top:10px" id="mode-executor">Я исполнитель — беру задачи и выполняю их</button></div>';
+ document.querySelector('#mode-customer').onclick=()=>setMode('customer');document.querySelector('#mode-executor').onclick=()=>setMode('executor');
+}
+async function setMode(mode){try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode})});activeRoom.work_mode=mode;await refreshMe();toast('Режим комнаты изменён');setTab('home')}catch(e){toast(e.message)}}
+
 function empty(title,desc,action=''){return '<div class="empty"><b>'+esc(title)+'</b>'+esc(desc)+(action||'')+'</div>'}
 function taskCard(t,adminView=false){
  let action='';
- if(t.status==='available'&&!isAdmin())action='<button class="btn" data-claim="'+t.id+'">Взять задачу</button>';
+ if(t.status==='available'&&workMode()==='executor'&&Number(t.created_by)!==Number(me.user.id))action='<button class="btn" data-claim="'+t.id+'">Взять задачу</button>';
  if(['in_progress','revision'].includes(t.status)&&Number(t.assignee_id)===Number(me.user.id))action='<button class="btn" data-submit="'+t.id+'">Сдать работу</button>';
  const statuses={available:'Открыта',in_progress:'В работе',submitted:'На проверке',revision:'Нужна доработка',accepted:'Принята',rejected:'Отклонена',cancelled:'Отменена',not_completed:'Не выполнена'};
  return '<article class="panel task"><div class="task-top"><span class="pill">'+esc(t.category||'Другое')+'</span><span class="price">'+rub(t.reward_kop)+'</span></div><h3>'+esc(t.title)+'</h3><p>'+esc(t.description||'Без дополнительного описания')+'</p><div class="task-bottom"><span class="status">'+(statuses[t.status]||esc(t.status))+'</span><span class="deadline">'+(t.deadline?'До '+esc(t.deadline):'Без срока')+'</span></div>'+(adminView&&t.assignee_name?'<div class="divider"></div><span class="muted">Исполнитель: '+esc(t.assignee_name)+'</span>':'')+(action?'<div class="actions">'+action+'</div>':'')+'</article>'
@@ -32,21 +90,21 @@ async function render(){
   view.innerHTML='<section class="hello"><div class="eyebrow">'+(isAdmin()?'YOUR WORKSPACE':'YOUR TEAM SPACE')+'</div><h1>'+greeting()+', '+esc(me.user.first_name||'друг')+'.</h1><p>Всё важное по задачам — в одном месте.</p></section><section class="hero"><div class="eyebrow">ТВОЙ БАЛАНС</div><div class="amount">'+rub(me.balance_kop)+'</div><div class="hero-foot">Начислено за принятые задачи</div></section><div class="stats"><div class="stat"><small>Мои задачи</small><strong>'+count+'</strong></div><div class="stat"><small>На проверке</small><strong>'+(me.counts?.submitted||0)+'</strong></div></div><div class="section-head"><h2>Быстрый доступ</h2><span>WORKSPACE</span></div><div class="panel"><div class="task-top"><div><b>Каталог задач</b><div class="muted" style="font-size:12px">Найди следующую задачу</div></div><button class="btn secondary" id="open-tasks">Открыть ↗</button></div></div>'+'<div class="section-head"><h2>Для команды</h2><span>CONTRIBUTE</span></div><div class="panel"><p class="muted" style="margin-top:0;font-size:13px">Есть идея или задача для команды? Предложи её здесь.</p><button class="btn" id="new-task">＋ Предложить задачу</button></div>'+(isAdmin()?'<div class="section-head"><h2>Управление</h2><span>ADMIN</span></div><div class="panel"><p class="muted" style="margin-top:0;font-size:13px">Контроль задач, команды и проверки.</p><div class="actions"><button class="btn secondary" id="open-moderation">Модерация задач</button><button class="btn secondary" id="open-review">Проверка работ</button><button class="btn secondary" id="open-admin-tasks">Все задачи</button><button class="btn secondary" id="open-team">Команда</button></div></div>':'');
   document.querySelector('#open-tasks').onclick=()=>setTab('tasks');document.querySelector('#new-task')?.addEventListener('click',createForm);document.querySelector('#open-review')?.addEventListener('click',showReview);document.querySelector('#open-moderation')?.addEventListener('click',showModeration);document.querySelector('#open-admin-tasks')?.addEventListener('click',showAllTasks);document.querySelector('#open-team')?.addEventListener('click',showTeam);
  }else if(tab==='tasks'){
-  const list=await api('/tasks');view.innerHTML='<div class="section-head"><h2>Открытые задачи</h2><span>'+list.length+' ДОСТУПНО</span></div>'+(list.length?list.map(t=>taskCard(t)).join(''):empty('Пока тихо','Новых задач пока нет. Загляни чуть позже.'))+'<button class="btn block" id="new-task">＋ Предложить задачу</button>';document.querySelector('#new-task')?.addEventListener('click',createForm);bindTaskActions();
+  if(!workMode()){showModeSetup();return}const list=await api('/tasks');view.innerHTML='<div class="section-head"><h2>Открытые задачи</h2><span>'+list.length+' ДОСТУПНО</span></div>'+(list.length?list.map(t=>taskCard(t)).join(''):empty('Пока тихо','Новых задач пока нет. Загляни чуть позже.'))+'<button class="btn block" id="new-task">＋ Предложить задачу</button>';document.querySelector('#new-task')?.addEventListener('click',createForm);bindTaskActions();
  }else if(tab==='mine'){
   const list=await api('/tasks?status=mine');view.innerHTML='<div class="section-head"><h2>Мои задачи</h2><span>'+list.length+' ВСЕГО</span></div>'+(list.length?list.map(t=>taskCard(t)).join(''):empty('Здесь пока пусто','Возьми задачу из каталога — она появится здесь.','<div class="actions" style="justify-content:center"><button class="btn" id="go-catalog">К задачам</button></div>'));document.querySelector('#go-catalog')?.addEventListener('click',()=>setTab('tasks'));bindTaskActions();
  }else if(tab==='balance'){
   me=await api('/me');
-  const rows=await api('/ledger');view.innerHTML='<div class="section-head"><h2>Финансы</h2><span>ИСТОРИЯ</span></div><section class="hero"><div class="eyebrow">ВСЕГО НАЧИСЛЕНО</div><div class="amount">'+rub(me.balance_kop)+'</div><div class="hero-foot">Внутренний баланс TaskHub</div></section><div class="panel">'+(rows.length?rows.map(x=>'<div class="ledger-row"><div><b>'+esc(x.title||x.kind)+'</b><small>'+esc(x.note||'Начисление')+' · '+esc(x.created_at)+'</small></div><b class="positive">+'+rub(x.amount_kop)+'</b></div>').join(''):empty('Начислений пока нет','После принятия задачи здесь появится запись.'))+'</div>';
+  const finance=await api('/rooms/'+activeRoom.id+'/ledger');me.balance_kop=finance.balance_kop;const rows=finance.entries;view.innerHTML='<div class="section-head"><h2>Финансы</h2><span>ИСТОРИЯ</span></div><section class="hero"><div class="eyebrow">ВСЕГО НАЧИСЛЕНО</div><div class="amount">'+rub(me.balance_kop)+'</div><div class="hero-foot">Внутренний баланс TaskHub</div></section><div class="panel">'+(rows.length?rows.map(x=>'<div class="ledger-row"><div><b>'+esc(x.title||x.kind)+'</b><small>'+esc(x.note||'Начисление')+' · '+esc(x.created_at)+'</small></div><b class="positive">+'+rub(x.amount_kop)+'</b></div>').join(''):empty('Начислений пока нет','После принятия задачи здесь появится запись.'))+'</div>';
  }else{
   view.innerHTML='<div class="section-head"><h2>Профиль</h2><span>ACCOUNT</span></div><div class="panel"><div class="profile-row"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div><div class="profile-name">'+esc(me.user.first_name)+'</div><div class="muted">@'+esc(me.user.username||'telegram')+'</div></div></div><div class="divider"></div><div class="task-bottom"><span class="muted">Роль</span><b>'+(isAdmin()?'Администратор':'Исполнитель')+'</b></div><div class="task-bottom" style="margin-top:12px"><span class="muted">Telegram ID</span><b>'+esc(me.user.telegram_id)+'</b></div></div>';
  }
 }
-async function claim(id){try{await api('/tasks/'+id+'/claim',{method:'POST'});me=await api('/me');toast('Задача закреплена за тобой');setTab('mine')}catch(e){toast(e.message)}}
+async function claim(id){try{await api('/tasks/'+id+'/claim',{method:'POST'});await refreshMe();toast('Задача закреплена за тобой');setTab('mine')}catch(e){toast(e.message)}}
 function submitForm(id){
  document.body.insertAdjacentHTML('beforeend','<div class="modal-backdrop" id="submitbox"><section class="modal-sheet"><div class="eyebrow">TASK DELIVERY</div><h2>Сдать работу</h2><p class="muted">Коротко опиши, что сделано. Можно добавить ссылку.</p><textarea class="field" id="submission" placeholder="Результат, ссылка или комментарий"></textarea><div class="actions"><button class="btn" id="send">Отправить на проверку</button><button class="btn secondary" id="cancel-submit">Отмена</button></div></section>');
  document.querySelector('#cancel-submit').onclick=()=>document.querySelector('#submitbox').remove();document.querySelector('#submitbox').onclick=e=>{if(e.target.id==='submitbox')e.target.remove()};
- document.querySelector('#send').onclick=async()=>{const body=document.querySelector('#submission').value.trim();if(!body)return toast('Добавь описание результата');try{await api('/tasks/'+id+'/submit',{method:'POST',body:JSON.stringify({body})});toast('Работа отправлена на проверку');me=await api('/me');setTab('mine')}catch(e){toast(e.message)}};
+ document.querySelector('#send').onclick=async()=>{const body=document.querySelector('#submission').value.trim();if(!body)return toast('Добавь описание результата');try{await api('/tasks/'+id+'/submit',{method:'POST',body:JSON.stringify({body})});toast('Работа отправлена на проверку');await refreshMe();setTab('mine')}catch(e){toast(e.message)}};
 }
 function createForm(){
  document.body.insertAdjacentHTML('beforeend','<div class="modal-backdrop" id="createbox"><section class="modal-sheet"><div class="eyebrow">TASK SPECIFICATION</div><h2>Новая задача</h2><label>Название</label><input class="field" id="title" maxlength="120" placeholder="Например, подготовить пост"><label>Описание и ожидаемый результат</label><textarea class="field" id="description" placeholder="Что нужно сделать? Какой результат должен получить заказчик?"></textarea><label>Категория</label><select class="field" id="category"><option>Контент</option><option>Социальные сети</option><option>Discord</option><option>Исследования</option><option>Дизайн</option><option>Техническое</option><option>Другое</option></select><label>Модель оплаты</label><select class="field" id="pricing"><option value="fixed">Фиксированная сумма</option><option value="normative">По нормативному времени</option></select><div id="fixed-fields"><label>Фиксированная оплата, ₽</label><input class="field" id="reward" type="number" min="0" step="1" placeholder="0"></div><div id="norm-fields" hidden><label>Нормативное время, минут</label><input class="field" id="norm" type="number" min="1" step="5" value="60"><div class="muted" style="font-size:12px;margin:-5px 0 12px">Базовая ставка — 100 ₽/час</div></div><label>Сложность</label><select class="field" id="difficulty"><option value="1">1.0 · Обычная</option><option value="1.2">1.2 · Немного сложнее</option><option value="1.5">1.5 · Сложная</option><option value="1.8">1.8 · Очень сложная</option><option value="2">2.0 · Экспертная</option></select><label>Срочность</label><select class="field" id="urgency"><option value="1">1.0 · Обычная</option><option value="1.1">1.1 · Повышенная</option><option value="1.25">1.25 · Срочная</option><option value="1.5">1.5 · Критическая</option></select><label>Срок выполнения</label><input class="field" id="deadline" type="date"><div class="panel" style="background:#202720;margin:10px 0"><div class="eyebrow">РАСЧЁТ ОПЛАТЫ</div><div id="price-preview" style="font-size:23px;font-weight:850;margin-top:6px">0 ₽</div><div class="muted" style="font-size:12px">Итоговая сумма зависит от нормативного времени, сложности и срочности. Качество учитывается при приёмке.</div></div><div class="actions"><button class="btn" id="create">Отправить на модерацию</button><button class="btn secondary" id="cancel-create">Отмена</button></div></section>');
