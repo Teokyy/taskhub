@@ -190,6 +190,12 @@ def init_db():
         )
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS market_notification_preferences(
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                categories TEXT NOT NULL DEFAULT '[]',
+                enabled INTEGER NOT NULL DEFAULT 0 CHECK(enabled IN (0,1)),
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id,stage_id,tour_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
             CREATE INDEX IF NOT EXISTS idx_submissions_task ON submissions(task_id,id);
