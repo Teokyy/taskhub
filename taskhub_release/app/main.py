@@ -1572,6 +1572,8 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
         active_deal = task["status"] == "in_progress"
         if active_deal and data.title.strip() != task["title"]:
             raise HTTPException(409, "После выбора исполнителя можно менять только описание и срок")
+        if active_deal and task["deadline"] and (not data.deadline or data.deadline[:10] < task["deadline"][:10]):
+            raise HTTPException(409, "После выбора исполнителя срок можно только продлить")
         if active_deal and (reward != task["reward_kop"] or (data.category_id and data.category_id != task["category_id"]) or data.category != task["category"]):
             raise HTTPException(409, "После выбора исполнителя награду и категорию менять нельзя")
         category_label=task["category"]; category_id=task["category_id"]
