@@ -3,7 +3,12 @@ import hmac
 import json
 import time
 import unittest
+import sys
+from pathlib import Path
 from urllib.parse import urlencode
+
+# Allow unittest discovery from the repository root as well as taskhub_release/.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.auth import verify_telegram_init_data
 

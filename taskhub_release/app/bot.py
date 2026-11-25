@@ -3,7 +3,10 @@ import logging
 import os
 
 from aiogram import Bot, Dispatcher
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
+from datetime import datetime, timezone
+import hashlib
+from .db import connect
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -30,7 +33,55 @@ async def start_bot():
     dp = Dispatcher()
     web_app = WebAppInfo(url=url)
 
+    @dp.message(Command("connect"))
+    async def connect_room(message: Message):
+        if message.chat.type not in ("group", "supergroup"):
+            await message.answer("Команду /connect нужно отправить в групповой Telegram-чате.")
+            return
+        parts = (message.text or "").split(maxsplit=1)
+        if len(parts) != 2:
+            await message.answer("Формат: /connect код. Получи одноразовый код в настройках комнаты TaskHub.")
+            return
+        token_hash = hashlib.sha256(parts[1].strip().encode()).hexdigest()
+        try:
+            with connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                code = conn.execute(
+                    """SELECT c.room_id,c.created_by,c.expires_at,u.telegram_id
+                       FROM telegram_room_link_codes c
+                       JOIN users u ON u.id=c.created_by
+                       JOIN room_members rm ON rm.room_id=c.room_id AND rm.user_id=c.created_by
+                       WHERE c.code_hash=? AND rm.left_at IS NULL
+                         AND rm.room_role IN ('owner','admin')""", (token_hash,)
+                ).fetchone()
+                if not code:
+                    await message.answer("Код не найден или уже использован. Создай новый в TaskHub.")
+                    return
+                expires = datetime.fromisoformat(code["expires_at"])
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if expires <= datetime.now(timezone.utc):
+                    conn.execute("DELETE FROM telegram_room_link_codes WHERE room_id=?", (code["room_id"],))
+                    await message.answer("Код истёк. Создай новый в TaskHub.")
+                    return
+                if int(message.from_user.id) != int(code["telegram_id"]):
+                    await message.answer("Подключить группу может только администратор, создавший код в TaskHub.")
+                    return
+                conn.execute(
+                    """INSERT INTO telegram_room_links(room_id,chat_id,chat_title,connected_by)
+                       VALUES(?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET
+                       chat_id=excluded.chat_id,chat_title=excluded.chat_title,
+                       connected_by=excluded.connected_by,connected_at=CURRENT_TIMESTAMP""",
+                    (code["room_id"], message.chat.id, message.chat.title or "Telegram-группа", code["created_by"]),
+                )
+                conn.execute("DELETE FROM telegram_room_link_codes WHERE room_id=?", (code["room_id"],))
+            await message.answer("Группа подключена к TaskHub. Сюда будут приходить уведомления о задачах.")
+        except Exception:
+            log.exception("TELEGRAM_ROOM_CONNECT_FAILED")
+            await message.answer("Не удалось подключить группу. Создай новый код в TaskHub.")
+
     @dp.message(CommandStart())
+
     async def start(message: Message):
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[

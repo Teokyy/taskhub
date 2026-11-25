@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#101310">
-  <title>TaskHub — Team Tasks</title>
+  <title>TaskHub — задачи команды</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root{color-scheme:dark;--bg:#101310;--panel:#191e19;--panel2:#202720;--line:#303a30;--text:#f1f3eb;--muted:#9ba497;--lime:#c7f36b;--lime-ink:#17200c;--red:#ff8278;--radius:20px}
@@ -16,7 +16,7 @@
     .shell{max-width:650px;margin:0 auto}
     .topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:27px}
     .brand{font-size:19px;font-weight:850;letter-spacing:-.8px}.brand span{color:var(--lime)}
-    .topright{display:flex;align-items:center;gap:10px}.eyebrow{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);font-weight:800}
+    .topright{display:flex;align-items:center;gap:10px}.room-switcher{max-width:190px}.room-select{max-width:190px;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:12px;padding:9px 28px 9px 11px;font-size:12px;font-weight:750;outline:none}.eyebrow{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);font-weight:800}
     .avatar{width:40px;height:40px;border-radius:14px;background:var(--lime);color:var(--lime-ink);display:grid;place-items:center;font-weight:900;font-size:16px}
     .hello{margin-bottom:20px}.hello h1{font-size:29px;line-height:1.08;letter-spacing:-1.3px;margin:6px 0}.hello p{color:var(--muted);margin:8px 0 0}
     .hero{background:var(--lime);color:var(--lime-ink);padding:21px;border-radius:24px;position:relative;overflow:hidden;margin:18px 0}
@@ -29,7 +29,7 @@
     .btn{border:0;border-radius:13px;padding:12px 16px;background:var(--lime);color:var(--lime-ink);font-weight:800;font-size:13px}.btn.block{width:100%}.btn.secondary{background:#293128;color:var(--text);border:1px solid var(--line)}.btn.ghost{background:transparent;color:var(--muted);padding:8px}.btn.danger{background:#512b28;color:#ffc0b8}.btn:disabled{opacity:.45;cursor:default}
     .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
     .nav{position:fixed;z-index:10;left:0;right:0;bottom:0;padding:9px 9px calc(9px + env(safe-area-inset-bottom));display:flex;justify-content:center;background:#141914ed;border-top:1px solid #303a30;backdrop-filter:blur(18px)}
-    .nav-inner{width:100%;max-width:650px;display:grid;grid-template-columns:repeat(5,1fr);gap:3px}
+    .nav-inner{width:100%;max-width:650px;display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
     .nav button{border:0;background:transparent;color:#899386;border-radius:13px;padding:8px 2px 7px;font-size:10px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:4px}
     .nav button .ico{font-size:18px;line-height:1.1}.nav button.active{background:#293128;color:var(--lime)}
     .field{width:100%;border:1px solid var(--line);background:#111611;color:var(--text);border-radius:12px;padding:13px;margin:6px 0 12px;outline:none}
@@ -45,32 +45,79 @@
     .modal-sheet{width:100%;max-width:560px;max-height:88dvh;overflow:auto;background:#171d17;border:1px solid #3a4638;border-radius:24px;padding:20px;box-shadow:0 24px 90px #0009}
     .modal-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.modal-close{border:0;background:#293128;color:var(--text);border-radius:12px;width:36px;height:36px;font-size:20px}
 
-    /* Refined compact bottom navigation */
-    .nav{padding:8px 14px calc(8px + env(safe-area-inset-bottom));background:rgba(14,18,14,.96);border-top:1px solid #273027;backdrop-filter:blur(22px)}
-    .nav-inner{max-width:650px;gap:8px;grid-template-columns:repeat(5,minmax(0,1fr))}
-    .nav button{position:relative;min-width:0;border:0;background:transparent;color:#7f897d;border-radius:14px;padding:10px 2px 9px;font-size:11px;letter-spacing:-.1px;font-weight:650;gap:3px;transition:background .18s ease,color .18s ease}
-    .nav button .ico{font-size:16px;line-height:1.15;opacity:.8}
-    .nav button.active{background:rgba(199,243,107,.11);color:var(--lime)}
+    /* Compact bottom navigation */
+    .nav{padding:7px 12px calc(7px + env(safe-area-inset-bottom));background:rgba(14,18,14,.97);border-top:1px solid #273027;backdrop-filter:blur(22px)}
+    .nav-inner{max-width:560px;gap:5px;grid-template-columns:repeat(4,minmax(0,1fr))}
+    .nav button{position:relative;min-width:0;border:1px solid transparent;background:transparent;color:#879184;border-radius:13px;padding:8px 2px 7px;font-size:10px;letter-spacing:0;font-weight:700;gap:4px;transition:background .18s ease,color .18s ease}
+    .nav button .ico{font-size:17px;line-height:1.1;opacity:.82}
+    .nav button.active{background:#283326;border-color:#394832;color:var(--lime)}
     .nav button.active .ico{opacity:1}
-    .nav button.active:after{content:"";position:absolute;top:0;left:34%;right:34%;height:2px;border-radius:0 0 4px 4px;background:var(--lime)}
+    .nav button.active:after{content:"";position:absolute;bottom:3px;left:38%;right:38%;height:2px;border-radius:4px;background:var(--lime)}
     @media(max-width:370px){.nav{padding-left:7px;padding-right:7px}.nav-inner{gap:3px}.nav button{font-size:10px}}
 
     @media(min-width:600px){body{padding-left:24px;padding-right:24px}.hello h1{font-size:34px}}
+
+    /* TaskHub redesign */
+    :root{--bg:#101210;--panel:#191c19;--panel2:#222722;--line:#303630;--text:#f1f2ef;--muted:#9a9f99;--lime:#b7d98a;--lime-ink:#182015;--radius:18px}
+    body{background:var(--bg);padding-top:calc(12px + env(safe-area-inset-top));padding-bottom:calc(82px + env(safe-area-inset-bottom))}
+    .shell{max-width:620px}
+    .topbar{margin-bottom:20px;min-height:46px}
+    .brand span:first-child{color:var(--text)}
+    .room-select{max-width:190px;background:#191c19;border-color:#343a34;border-radius:11px}
+    .avatar{border:1px solid #3a403a;background:#252a25;color:#f1f2ef;border-radius:50%;width:38px;height:38px;padding:0;overflow:hidden}
+    .hello{margin-bottom:18px}.hello h1{font-size:25px;letter-spacing:-.8px}
+    .section-head{margin:20px 1px 10px}.section-head h2{font-size:20px}
+    .panel{border-radius:17px;background:#191c19;border-color:#2b312b;padding:16px}
+    .task{padding:16px;margin:9px 0}
+    .task h3{font-size:16px;margin:11px 0 5px}
+    .pill{background:#252a25;color:#c4c9c2;border:1px solid #343a34}
+    .price{font-size:15px}
+    .btn{background:var(--lime);color:var(--lime-ink);border-radius:11px;padding:11px 15px}
+    .btn.secondary{background:#242924;border:1px solid #363d36;color:#e4e7e2}
+    .btn.danger{background:#392725;color:#f0aaa2}
+    .nav{background:rgba(17,19,17,.96);border-top:1px solid #2b302b;padding:8px 14px calc(8px + env(safe-area-inset-bottom))}
+    .nav-inner{max-width:620px;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .nav button{flex-direction:row;justify-content:center;gap:9px;padding:11px 8px;font-size:13px;border-radius:12px;color:#a3a8a1}
+    .nav button .ico{font-size:16px}
+    .nav button.active{background:#252a25;border-color:#394139;color:#f1f2ef}
+    .nav button.active:after{display:none}
+    .field{background:#111411;border-color:#303630;border-radius:11px}
+    .empty{background:#191c19;border-color:#353b35;border-radius:16px}
+    .hero{background:#202620;color:#f1f2ef;border:1px solid #384238;border-radius:18px}
+    .hero:after{display:none}.hero .eyebrow,.hero-foot{color:#aab2a6}
+    .stats{gap:8px}.stat{border-radius:15px;background:#191c19;border-color:#2b312b}
+    .profile-row{gap:12px}.big-avatar{background:#292f29;color:#e8ece6}
+    .positive{color:#c5d7b3}
+    .filter-row{display:flex;gap:8px;overflow:auto;padding:2px 0 8px}
+    .filter-chip{border:1px solid #343a34;background:#191c19;color:#aeb4ad;border-radius:99px;padding:8px 12px;font-size:12px;white-space:nowrap}
+    .filter-chip.active{background:#2a302a;color:#f1f2ef;border-color:#566052}
+    .task .actions{justify-content:flex-end}
+    @media(min-width:600px){body{padding-left:24px;padding-right:24px}}
   </style>
 </head>
 <body>
   <div class="shell">
-    <header class="topbar"><div class="brand">TASK<span>HUB</span><span style="color:var(--text)">.</span></div><div class="topright"><div class="eyebrow" id="role-label">TEAM SPACE</div><div id="avatar" class="avatar">T</div></div></header>
+    <header class="topbar"><div class="brand">TASK<span>HUB</span><span style="color:var(--text)">.</span></div><div class="topright"><div id="room-switcher" class="room-switcher"></div><button id="avatar" class="avatar" type="button" aria-label="Открыть профиль">T</button></div></header>
     <main id="view"><div class="empty">Загружаем рабочее пространство…</div></main>
   </div>
-  <nav class="nav"><div class="nav-inner">
-    <button data-tab="home" class="active"><span class="ico">⌂</span>Обзор</button>
-    <button data-tab="tasks"><span class="ico">▤</span>Задачи</button>
-    <button data-tab="mine"><span class="ico">◷</span>Мои</button>
-    <button data-tab="balance"><span class="ico">₽</span>Баланс</button>
+  <nav class="nav" aria-label="Основная навигация"><div class="nav-inner">
+    <button data-tab="tasks" class="active"><span class="ico">▤</span>Задачи</button>
     <button data-tab="profile"><span class="ico">◉</span>Профиль</button>
   </div></nav>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=4"></script>
+  <script src="/static/app.js?v=9"></script>
+  <script src="/static/budget.js?v=1"></script>
+  <script>
+    document.addEventListener('click', async event => {
+      const button = event.target.closest('[data-refuse]');
+      if (!button || !activeRoom) return;
+      if (!confirm('Отказаться от этой задачи? Она снова станет доступна участникам комнаты.')) return;
+      button.disabled = true;
+      try {
+        await api('/rooms/' + activeRoom.id + '/tasks/' + button.dataset.refuse + '/refuse', {method:'POST'});
+        await refreshMe(); toast('Ты отказался от задачи'); setTab('profile');
+      } catch (error) { toast(error.message); button.disabled = false; }
+    });
+  </script>
 </body>
 </html>
