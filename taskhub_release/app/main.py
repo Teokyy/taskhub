@@ -1632,75 +1632,31 @@ def set_market_notification_preferences(data: MarketNotificationPrefs, x_telegra
 @app.get("/api/market/services")
 def market_services(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     user(x_telegram_init_data)
-    with connect() as conn:
-        rows = conn.execute("""SELECT s.*,u.first_name seller_name,u.username seller_username,
-            (SELECT COUNT(*) FROM market_service_orders o WHERE o.service_id=s.id AND o.status NOT IN ('cancelled','completed')) active_orders
-            FROM market_services s JOIN users u ON u.id=s.seller_id WHERE s.active=1 ORDER BY s.id DESC""").fetchall()
-    return [dict(r) for r in rows]
+    raise HTTPException(410,"Каталог постоянных услуг не входит в MVP TaskHub.")
 
 
 @app.post("/api/market/services")
 def create_market_service(data: MarketServiceIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account = user(x_telegram_init_data)
-    with connect() as conn:
-        cur = conn.execute("INSERT INTO market_services(seller_id,title,description,category,price_kop,delivery_minutes) VALUES(?,?,?,?,?,?)",
-            (account["id"], data.title.strip(), data.description.strip(), data.category.strip(), data.price_rub*100, data.delivery_minutes))
-        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "create_market_service", "market_service", cur.lastrowid, "public_marketplace"))
-        return dict(conn.execute("SELECT * FROM market_services WHERE id=?", (cur.lastrowid,)).fetchone())
+    user(x_telegram_init_data)
+    raise HTTPException(410,"Публикация постоянных услуг не входит в MVP TaskHub.")
 
 
 @app.post("/api/market/services/{service_id}/orders")
-async def create_market_service_order(service_id: int, data: MarketServiceOrderIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account = user(x_telegram_init_data)
-    with connect() as conn:
-        service = conn.execute("SELECT s.*,u.telegram_id seller_telegram_id FROM market_services s JOIN users u ON u.id=s.seller_id WHERE s.id=? AND s.active=1", (service_id,)).fetchone()
-        if not service:
-            raise HTTPException(404, "Услуга больше недоступна")
-        if int(service["seller_id"]) == int(account["id"]):
-            raise HTTPException(403, "Нельзя заказать собственную услугу")
-        cur = conn.execute("INSERT INTO market_service_orders(service_id,buyer_id,seller_id,details,price_kop) VALUES(?,?,?,?,?)",
-            (service_id, account["id"], service["seller_id"], data.details.strip(), service["price_kop"]))
-        order_id = cur.lastrowid
-        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "create_market_service_order", "market_service_order", order_id, f"service_id={service_id}"))
-    await notify_telegram(service["seller_telegram_id"], f"🛒 Новый заказ услуги «{service['title']}» #{order_id}. Открой TaskHub, чтобы ответить.")
-    return {"ok": True, "order_id": order_id, "status": "created"}
+def create_market_service_order(service_id: int, data: MarketServiceOrderIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    user(x_telegram_init_data)
+    raise HTTPException(410,"Заказы постоянных услуг не входят в MVP TaskHub.")
 
 
 @app.get("/api/market/service-orders")
 def market_service_orders(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account = user(x_telegram_init_data)
-    with connect() as conn:
-        rows = conn.execute("""SELECT o.*,s.title service_title,s.category,b.first_name buyer_name,sel.first_name seller_name
-            FROM market_service_orders o JOIN market_services s ON s.id=o.service_id
-            JOIN users b ON b.id=o.buyer_id JOIN users sel ON sel.id=o.seller_id
-            WHERE o.buyer_id=? OR o.seller_id=? ORDER BY o.id DESC LIMIT 100""", (account["id"], account["id"])).fetchall()
-    return [dict(r) for r in rows]
+    user(x_telegram_init_data)
+    raise HTTPException(410,"Заказы постоянных услуг не входят в MVP TaskHub.")
 
 
 @app.patch("/api/market/service-orders/{order_id}")
-async def update_market_service_order(order_id: int, data: MarketServiceOrderStatusIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
-    account = user(x_telegram_init_data)
-    with connect() as conn:
-        order = conn.execute("SELECT o.*,b.telegram_id buyer_telegram_id,seller.telegram_id seller_telegram_id,s.title service_title FROM market_service_orders o JOIN users b ON b.id=o.buyer_id JOIN users seller ON seller.id=o.seller_id JOIN market_services s ON s.id=o.service_id WHERE o.id=?", (order_id,)).fetchone()
-        if not order:
-            raise HTTPException(404, "Заказ услуги не найден")
-        old = order["status"]
-        if data.status == "accepted" and int(order["seller_id"]) == int(account["id"]) and old == "created":
-            pass
-        elif data.status == "delivered" and int(order["seller_id"]) == int(account["id"]) and old == "accepted":
-            pass
-        elif data.status == "completed" and int(order["buyer_id"]) == int(account["id"]) and old == "delivered":
-            pass
-        elif data.status == "cancelled" and int(order["buyer_id"]) == int(account["id"]) and old == "created":
-            pass
-        else:
-            raise HTTPException(403, "Это действие недоступно для твоей роли или текущего статуса заказа")
-        conn.execute("UPDATE market_service_orders SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status=?", (data.status, order_id, old))
-        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "update_market_service_order", "market_service_order", order_id, f"{old}->{data.status}"))
-    recipient = order["buyer_telegram_id"] if int(order["seller_id"]) == int(account["id"]) else order["seller_telegram_id"]
-    await notify_telegram(recipient, f"📦 Заказ услуги «{order['service_title']}» #{order_id}: статус «{data.status}».")
-    return {"ok": True, "status": data.status}
-
+def update_market_service_order(order_id: int, data: MarketServiceOrderStatusIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    user(x_telegram_init_data)
+    raise HTTPException(410,"Заказы постоянных услуг не входят в MVP TaskHub.")
 
 
 @app.get("/api/market/tasks/{task_id}/responses")
