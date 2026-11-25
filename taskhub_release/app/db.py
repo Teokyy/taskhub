@@ -189,6 +189,132 @@ def init_db():
         conn.execute(
             "UPDATE tasks SET fixed_reward_kop=reward_kop WHERE fixed_reward_kop=0 AND reward_kop>0"
         )
+
+        # Marketplace MVP domain schema. All tables are additive so existing
+        # room data, task history and balances remain untouched.
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS categories(
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                parent_id INTEGER REFERENCES categories(id),
+                is_hidden INTEGER NOT NULL DEFAULT 0 CHECK(is_hidden IN (0,1)),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(parent_id,name)
+            );
+            CREATE TABLE IF NOT EXISTS category_requests(
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                task_id INTEGER NOT NULL REFERENCES tasks(id),
+                text TEXT NOT NULL CHECK(length(text)<=200),
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','added','moved','rejected')),
+                resolved_category_id INTEGER REFERENCES categories(id),
+                moderator_id INTEGER REFERENCES users(id),
+                resolution_note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS responses(
+                id INTEGER PRIMARY KEY,
+                task_id INTEGER NOT NULL REFERENCES tasks(id),
+                executor_id INTEGER NOT NULL REFERENCES users(id),
+                message TEXT NOT NULL DEFAULT '' CHECK(length(message)<=1000),
+                proposed_deadline TEXT,
+                status TEXT NOT NULL DEFAULT 'sent' CHECK(status IN ('sent','accepted','rejected','withdrawn')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(task_id,executor_id)
+            );
+            CREATE TABLE IF NOT EXISTS chats(
+                id INTEGER PRIMARY KEY,
+                response_id INTEGER NOT NULL UNIQUE REFERENCES responses(id),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                closed_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS messages(
+                id INTEGER PRIMARY KEY,
+                chat_id INTEGER NOT NULL REFERENCES chats(id),
+                sender_id INTEGER NOT NULL REFERENCES users(id),
+                text TEXT NOT NULL CHECK(length(text)<=2000),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                read_at TEXT,
+                hidden_for_user_id INTEGER REFERENCES users(id)
+            );
+            CREATE TABLE IF NOT EXISTS task_history(
+                id INTEGER PRIMARY KEY,
+                task_id INTEGER NOT NULL REFERENCES tasks(id),
+                changed_by INTEGER NOT NULL REFERENCES users(id),
+                field TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                changed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS reviews(
+                id INTEGER PRIMARY KEY,
+                task_id INTEGER NOT NULL REFERENCES tasks(id),
+                author_id INTEGER NOT NULL REFERENCES users(id),
+                target_id INTEGER NOT NULL REFERENCES users(id),
+                rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+                text TEXT NOT NULL DEFAULT '' CHECK(length(text)<=500),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(task_id,author_id)
+            );
+            CREATE TABLE IF NOT EXISTS subscriptions(
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                category_id INTEGER NOT NULL REFERENCES categories(id),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id,category_id)
+            );
+            CREATE TABLE IF NOT EXISTS achievements(
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                code TEXT NOT NULL,
+                earned_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY(user_id,code)
+            );
+            CREATE TABLE IF NOT EXISTS notifications(
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                type TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                sent_at TEXT,
+                channel TEXT NOT NULL DEFAULT 'telegram'
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_category_status_created ON tasks(category_id,status,created_at);
+            CREATE INDEX IF NOT EXISTS idx_responses_task_status ON responses(task_id,status,created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_chat_created ON messages(chat_id,created_at);
+            CREATE INDEX IF NOT EXISTS idx_subscriptions_category ON subscriptions(category_id);
+            CREATE INDEX IF NOT EXISTS idx_category_requests_status_created ON category_requests(status,created_at);
+            CREATE INDEX IF NOT EXISTS idx_task_history_task_changed ON task_history(task_id,changed_at);
+            CREATE INDEX IF NOT EXISTS idx_notifications_unsent ON notifications(sent_at,created_at);
+            """
+        )
+        _add_column(conn, "tasks", "category_id INTEGER REFERENCES categories(id)")
+        _add_column(conn, "tasks", "author_id INTEGER REFERENCES users(id)")
+        _add_column(conn, "tasks", "dispute_status TEXT")
+        _add_column(conn, "tasks", "completed_at TEXT")
+
+        # Seed the two-level launch taxonomy idempotently.
+        category_tree = {
+            "Маркетинг": ["SMM", "Таргетированная реклама", "Копирайтинг", "SEO", "Дизайн соцсетей", "Видеомонтаж для соцсетей", "Email-рассылки", "Инфлюенс-маркетинг"],
+            "Discord": ["Боты", "Оформление серверов", "Модерация серверов", "Настройка ролей и прав", "Разработка интеграций", "Дизайн эмодзи и баннеров"],
+            "Игры": ["Гайды и тексты", "Моддинг", "Прокачка аккаунтов", "Дизайн игровых ассетов", "Буст и тренировки", "Тестирование и баг-репорты", "Стримы и монтаж"],
+            "Разработка": ["Telegram-боты", "Сайты и лендинги", "Мобильные приложения", "Скрипты и автоматизация"],
+            "Дизайн": ["Логотипы и брендинг", "Иллюстрации", "UI/UX", "Презентации"],
+            "Тексты и переводы": ["Копирайтинг", "Редактура", "Переводы", "Транскрибация"],
+            "Видео и аудио": ["Видеомонтаж", "Озвучка", "Motion-дизайн", "Подкасты"],
+            "Образование и репетиторство": ["Языки", "Школьные предметы", "Программирование", "Подготовка к экзаменам"],
+            "Бизнес и финансы": ["Бухгалтерия", "Юридическая помощь", "Бизнес-планы", "Консультации"],
+            "Другое": ["Прочее"],
+        }
+        for parent_name, children in category_tree.items():
+            conn.execute("INSERT OR IGNORE INTO categories(name,parent_id) VALUES(?,NULL)", (parent_name,))
+            parent_id = conn.execute("SELECT id FROM categories WHERE name=? AND parent_id IS NULL", (parent_name,)).fetchone()["id"]
+            for child_name in children:
+                conn.execute("INSERT OR IGNORE INTO categories(name,parent_id) VALUES(?,?)", (child_name,parent_id))
+        conn.execute("UPDATE tasks SET author_id=created_by WHERE author_id IS NULL AND created_by IS NOT NULL")
+
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS market_services(
