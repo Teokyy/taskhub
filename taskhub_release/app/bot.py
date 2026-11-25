@@ -81,9 +81,11 @@ async def start_bot():
             log.exception("TELEGRAM_ROOM_CONNECT_FAILED")
             await message.answer("Не удалось подключить группу. Создай новый код в TaskHub.")
 
-    async def open_app(message: Message, text: str):
+    async def open_app(message: Message, text: str, tab: str = "exchange", action: str | None = None):
+        query=f"?tab={tab}"+(f"&action={action}" if action else "")
+        app_link=WebAppInfo(url=url+query)
         keyboard=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🚀 Открыть TaskHub",web_app=web_app)]
+            [InlineKeyboardButton(text="🚀 Открыть TaskHub",web_app=app_link)]
         ])
         await message.answer(text,reply_markup=keyboard)
 
@@ -115,9 +117,9 @@ async def start_bot():
         role_flags=(row["role_flags"] if row else "both")
         buttons=[]
         if role_flags in ("customer","both"):
-            buttons.append([InlineKeyboardButton(text="➕ Создать задание",web_app=web_app)])
+            buttons.append([InlineKeyboardButton(text="➕ Создать задание",web_app=WebAppInfo(url=url+"?tab=exchange&action=create"))])
         if role_flags in ("executor","both"):
-            buttons.append([InlineKeyboardButton(text="🔎 Открыть ленту",web_app=web_app)])
+            buttons.append([InlineKeyboardButton(text="🔎 Открыть ленту",web_app=WebAppInfo(url=url+"?tab=exchange"))])
         buttons.append([InlineKeyboardButton(text="Завершить квест",callback_data="quest:finish")])
         await target.answer("Шаг 3 из 3 — сделай первое действие. Можно открыть приложение и вернуться сюда позже.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
@@ -166,11 +168,11 @@ async def start_bot():
 
     @dp.message(Command("mine"))
     async def mine_command(message: Message):
-        await open_app(message,"Твои задания и отклики находятся в профиле TaskHub:")
+        await open_app(message,"Твои задания и отклики находятся в профиле TaskHub:","profile")
 
     @dp.message(Command("chats"))
     async def chats_command(message: Message):
-        await open_app(message,"Открой свои диалоги в профиле TaskHub:")
+        await open_app(message,"Открой свои диалоги в TaskHub:","chats")
 
     @dp.message(Command("menu"))
     async def menu_command(message: Message):
