@@ -23,7 +23,13 @@ def set_budget_limit(conn: sqlite3.Connection, room_id: int, actor_id: int,
     committed = int(room["budget_reserved_kop"] or 0) + int(room["budget_spent_kop"] or 0)
     if limit_kop is not None and limit_kop < committed:
         raise RoomError(f"Лимит ниже уже занятой суммы ({committed} коп.)", 409)
-    conn.execute("UPDATE rooms SET budget_limit_kop=? WHERE id=?", (limit_kop, room_id))
+    cur = conn.execute(
+        """UPDATE rooms SET budget_limit_kop=?
+           WHERE id=? AND (? IS NULL OR budget_reserved_kop+budget_spent_kop<=?)""",
+        (limit_kop, room_id, limit_kop, limit_kop),
+    )
+    if cur.rowcount != 1:
+        raise RoomError("Лимит ниже уже занятой суммы", 409)
     conn.execute("""INSERT INTO budget_events(room_id,actor_id,event_type,amount_kop,details)
                     VALUES(?,?,'limit_changed',?,?)""",
                  (room_id, actor_id, limit_kop or 0, "unlimited" if limit_kop is None else ""))
@@ -73,19 +79,6 @@ def _task_scope(conn: sqlite3.Connection, room_id: int, task_id: int):
     return task, project, stage if stage_id is not None else None
 
 
-def _check_project_spend(conn, project, stage, reserved: int, spent: int) -> None:
-    if stage is not None:
-        if int(stage["budget_reserved_kop"] or 0) - reserved + int(stage["budget_spent_kop"] or 0) + spent > int(stage["budget_kop"]):
-            raise RoomError("Фактическая выплата превышает остаток бюджета этапа", 409)
-    elif project is not None:
-        allocated = conn.execute(
-            "SELECT COALESCE(SUM(budget_kop),0) n FROM stages WHERE project_id=? AND room_id=?",
-            (project["id"], project["room_id"]),
-        ).fetchone()["n"]
-        if allocated + int(project["budget_reserved_kop"] or 0) - reserved + int(project["budget_spent_kop"] or 0) + spent > int(project["budget_kop"]):
-            raise RoomError("Фактическая выплата превышает остаток прямого бюджета проекта", 409)
-
-
 def _reserve_project_scope(conn, project, stage, amount_kop: int) -> None:
     if stage is not None:
         cur = conn.execute(
@@ -112,19 +105,30 @@ def _reserve_project_scope(conn, project, stage, amount_kop: int) -> None:
             raise RoomError("Недостаточно свободного прямого бюджета проекта", 409)
 
 
-def _release_project_scope(conn, project, stage, amount: int, spent: bool) -> None:
+def _release_project_scope(conn, project, stage, amount: int, actual_spent: int) -> None:
     if stage is not None:
-        conn.execute(
-            """UPDATE stages SET budget_reserved_kop=MAX(0,budget_reserved_kop-?),
-               budget_spent_kop=budget_spent_kop+? WHERE id=?""",
-            (amount, amount if spent else 0, stage["id"]),
+        cur = conn.execute(
+            """UPDATE stages SET budget_reserved_kop=budget_reserved_kop-?,
+               budget_spent_kop=budget_spent_kop+?
+               WHERE id=? AND budget_reserved_kop>=?
+                 AND budget_reserved_kop-?+budget_spent_kop+?<=budget_kop""",
+            (amount, actual_spent, stage["id"], amount, amount, actual_spent),
         )
+        if cur.rowcount != 1:
+            raise RoomError("Фактическая выплата превышает остаток бюджета этапа", 409)
     elif project is not None:
-        conn.execute(
-            """UPDATE projects SET budget_reserved_kop=MAX(0,budget_reserved_kop-?),
-               budget_spent_kop=budget_spent_kop+? WHERE id=?""",
-            (amount, amount if spent else 0, project["id"]),
+        cur = conn.execute(
+            """UPDATE projects SET budget_reserved_kop=budget_reserved_kop-?,
+               budget_spent_kop=budget_spent_kop+?
+               WHERE id=? AND room_id=? AND budget_reserved_kop>=?
+                 AND COALESCE((SELECT SUM(s.budget_kop) FROM stages s
+                               WHERE s.project_id=projects.id AND s.room_id=projects.room_id),0)
+                     +budget_reserved_kop-?+budget_spent_kop+?<=budget_kop""",
+            (amount, actual_spent, project["id"], project["room_id"],
+             amount, amount, actual_spent),
         )
+        if cur.rowcount != 1:
+            raise RoomError("Фактическая выплата превышает остаток прямого бюджета проекта", 409)
 
 
 def reserve_task(conn: sqlite3.Connection, room_id: int, task_id: int,
@@ -160,29 +164,24 @@ def release_task(conn: sqlite3.Connection, room_id: int, task_id: int,
     actual_spent = amount if event_type == "spent" and spent_amount_kop is None else (int(spent_amount_kop or 0) if event_type == "spent" else 0)
     if actual_spent < 0:
         raise RoomError("Фактическая выплата не может быть отрицательной", 422)
-    room = conn.execute(
-        "SELECT budget_limit_kop,budget_reserved_kop,budget_spent_kop FROM rooms WHERE id=?",
-        (room_id,),
-    ).fetchone()
-    if event_type == "spent":
-        if room["budget_limit_kop"] is not None and int(room["budget_reserved_kop"] or 0) - amount + int(room["budget_spent_kop"] or 0) + actual_spent > int(room["budget_limit_kop"]):
-            raise RoomError("Фактическая выплата превышает остаток бюджета комнаты", 409)
-        _check_project_spend(conn, project, stage, amount, actual_spent)
     cur = conn.execute("""UPDATE tasks SET budget_reserved_kop=0
         WHERE id=? AND room_id=? AND budget_reserved_kop=?""", (task_id, room_id, amount))
     if cur.rowcount != 1:
         raise RoomError("Резерв задачи уже изменён, обнови страницу", 409)
-    conn.execute("""UPDATE rooms SET budget_reserved_kop=MAX(0,budget_reserved_kop-?),
-        budget_spent_kop=budget_spent_kop+? WHERE id=?""",
-        (amount, actual_spent, room_id))
-    _release_project_scope(conn, project, stage, amount, event_type == "spent")
-    if event_type == "spent" and actual_spent != amount:
-        if stage is not None:
-            conn.execute("UPDATE stages SET budget_spent_kop=budget_spent_kop+? WHERE id=?",
-                         (actual_spent - amount, stage["id"]))
-        elif project is not None:
-            conn.execute("UPDATE projects SET budget_spent_kop=budget_spent_kop+? WHERE id=?",
-                         (actual_spent - amount, project["id"]))
+    cur = conn.execute(
+        """UPDATE rooms SET budget_reserved_kop=budget_reserved_kop-?,
+           budget_spent_kop=budget_spent_kop+?
+           WHERE id=? AND budget_reserved_kop>=?
+             AND (budget_limit_kop IS NULL OR
+                  budget_reserved_kop-?+budget_spent_kop+?<=budget_limit_kop)""",
+        (amount, actual_spent, room_id, amount, amount, actual_spent),
+    )
+    if cur.rowcount != 1:
+        raise RoomError("Фактическая выплата превышает остаток бюджета комнаты", 409)
+    _release_project_scope(
+        conn, project, stage, amount,
+        actual_spent if event_type == "spent" else 0,
+    )
     conn.execute("""INSERT INTO budget_events(room_id,task_id,actor_id,event_type,amount_kop,details)
                     VALUES(?,?,?,?,?,?)""",
                  (room_id, task_id, actor_id, event_type, actual_spent if event_type == "spent" else amount,
