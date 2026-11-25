@@ -1677,21 +1677,28 @@ def withdraw_market_response(response_id: int, x_telegram_init_data: str = Heade
 @app.post("/api/market/responses/{response_id}/accept")
 async def accept_market_response(response_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
+    rejected_recipients=[]
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row=conn.execute("""SELECT r.*,t.id task_id,t.title,t.created_by,t.status task_status,
             u.telegram_id executor_telegram_id FROM responses r JOIN tasks t ON t.id=r.task_id
             JOIN users u ON u.id=r.executor_id WHERE r.id=? AND t.room_id IS NULL""",(response_id,)).fetchone()
         if not row or int(row["created_by"])!=int(account["id"]): raise HTTPException(404,"Отклик не найден")
         if row["task_status"]!="open" or row["status"]!="sent": raise HTTPException(409,"Задание или отклик уже обработаны")
+        others=conn.execute("""SELECT u.telegram_id FROM responses r JOIN users u ON u.id=r.executor_id
+            WHERE r.task_id=? AND r.id<>? AND r.status='sent'""",(row["task_id"],response_id)).fetchall()
+        rejected_recipients=[x["telegram_id"] for x in others if x["telegram_id"]]
+        cur=conn.execute("UPDATE tasks SET status='in_progress',assignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='open'",(row["executor_id"],row["task_id"]))
+        if cur.rowcount!=1: raise HTTPException(409,"Задание уже выбрал другой заказчик или оно закрыто")
         conn.execute("UPDATE responses SET status='accepted',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='sent'",(response_id,))
         conn.execute("UPDATE responses SET status='rejected',updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND id<>? AND status='sent'",(row["task_id"],response_id))
-        conn.execute("UPDATE tasks SET status='in_progress',assignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='open'",(row["executor_id"],row["task_id"]))
         cur=conn.execute("INSERT INTO chats(response_id) VALUES(?)",(response_id,))
         chat_id=cur.lastrowid
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"accept_response","response",response_id,f"chat_id={chat_id}"))
     await notify_telegram(row["executor_telegram_id"],f"✅ Твой отклик принят: «{row['title']}». Чат с заказчиком открыт.")
+    for recipient in rejected_recipients:
+        await notify_telegram(recipient,f"Заказчик выбрал другого исполнителя для задания «{row['title']}». Спасибо за отклик.")
     return {"ok":True,"chat_id":chat_id,"status":"in_progress"}
-
 
 
 @app.get("/api/market/responses/mine")
