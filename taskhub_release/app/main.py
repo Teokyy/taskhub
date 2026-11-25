@@ -543,6 +543,8 @@ def review_room_task(room_id: int, task_id: int, data: ReviewIn,
         raise HTTPException(400, "Укажи причину")
     if data.quality not in QUALITY_FACTORS:
         raise HTTPException(400, "Неизвестная оценка качества")
+    if data.quality != "good" and not data.comment.strip():
+        raise HTTPException(400, "Для нестандартной оценки качества укажи обоснование")
     new_status = {"accept": "accepted", "revision": "revision", "reject": "rejected"}[data.decision]
     with connect() as conn:
         ensure_rooms_schema(conn)
