@@ -27,6 +27,17 @@ URGENCY_FACTORS = {1.0, 1.1, 1.25, 1.5}
 QUALITY_FACTORS = {"acceptable": 0.9, "good": 1.0, "excellent": 1.1, "outstanding": 1.2}
 
 
+async def notify_telegram(telegram_id: int | None, message: str):
+    """Send a best-effort Telegram notification without breaking the task action."""
+    if not telegram_id or not _bot:
+        log.warning("TELEGRAM_NOTIFICATION_SKIPPED: bot unavailable or recipient missing")
+        return
+    try:
+        await _bot.send_message(chat_id=telegram_id, text=message)
+    except Exception:
+        log.exception("TELEGRAM_NOTIFICATION_FAILED recipient=%s", telegram_id)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _bot_task, _bot, _bot_status
@@ -308,27 +319,30 @@ def get_criteria(task_id:int,x_telegram_init_data:str=Header(default="",alias="X
 
 
 @app.post("/api/tasks/{task_id}/claim")
-def claim(task_id:int,x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
+async def claim(task_id:int,x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
     if account["role"]=="admin": raise HTTPException(403,"Администратор не может брать задачи исполнителя")
     with connect() as conn:
+        task=conn.execute("SELECT t.title,creator.telegram_id creator_telegram_id FROM tasks t LEFT JOIN users creator ON creator.id=t.created_by WHERE t.id=? AND t.status='available'",(task_id,)).fetchone()
+        if not task: raise HTTPException(409,"Задача уже занята или недоступна")
         cur=conn.execute("UPDATE tasks SET status='in_progress',assignee_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='available'",(account["id"],task_id))
         if cur.rowcount!=1: raise HTTPException(409,"Задача уже занята или недоступна")
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"claim","task",task_id))
+    await notify_telegram(task["creator_telegram_id"],f"👀 Твою задачу взяли в работу!\\n\\n«{task['title']}»\\nИсполнитель: {account.get('first_name') or 'Участник'}")
     return {"ok":True}
 
 
 @app.post("/api/tasks/{task_id}/submit")
-def submit(task_id:int,data:SubmitIn,x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
+async def submit(task_id:int,data:SubmitIn,x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
     if not data.body.strip(): raise HTTPException(422,"Добавь описание результата или ссылку")
     with connect() as conn:
-        task=conn.execute("SELECT * FROM tasks WHERE id=?",(task_id,)).fetchone()
-        if not task or task["assignee_id"]!=account["id"] or task["status"] not in ("in_progress","revision"):
-            raise HTTPException(409,"Нельзя сдать эту задачу")
+        task=conn.execute("SELECT t.title,creator.telegram_id creator_telegram_id FROM tasks t LEFT JOIN users creator ON creator.id=t.created_by WHERE t.id=? AND t.assignee_id=? AND t.status IN ('in_progress','revision')",(task_id,account["id"])).fetchone()
+        if not task: raise HTTPException(409,"Нельзя сдать эту задачу")
         cur=conn.execute("INSERT INTO submissions(task_id,user_id,body) VALUES(?,?,?)",(task_id,account["id"],data.body.strip()))
         conn.execute("UPDATE tasks SET status='submitted',updated_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,))
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"submit","submission",cur.lastrowid,f"task_id={task_id}"))
+    await notify_telegram(task["creator_telegram_id"],f"📨 Работа по твоей задаче отправлена на проверку!\\n\\n«{task['title']}»\\nИсполнитель: {account.get('first_name') or 'Участник'}")
     return {"ok":True}
 
 
