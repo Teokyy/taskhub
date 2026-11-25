@@ -253,7 +253,7 @@ def ensure_rooms_schema(conn):
     for table in legacy_tables:
         if conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]:
             raise HTTPException(503, "Обнаружены старые данные. Для них нужна отдельная проверенная миграция.")
-    from .scripts.migrate_to_rooms import create_schema, SCHEMA_VERSION
+    from scripts.migrate_to_rooms import create_schema, SCHEMA_VERSION
     create_schema(conn)
     conn.execute(
         "INSERT OR IGNORE INTO schema_migrations(version,name) VALUES(?,?)",
