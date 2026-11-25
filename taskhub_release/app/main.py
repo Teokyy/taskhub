@@ -161,6 +161,72 @@ def room_tasks(room_id: int, status: str = "available",
         return [dict(row) for row in rows]
 
 
+@app.get("/api/rooms/{room_id}/moderation")
+def room_moderation_queue(room_id: int,
+                          x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        rows = conn.execute(
+            """SELECT t.*,u.first_name creator_name,u.username creator_username
+               FROM tasks t LEFT JOIN users u ON u.id=t.created_by
+               WHERE t.room_id=? AND t.status='pending'
+                 AND t.moderation_status='pending' ORDER BY t.created_at,t.id""",
+            (room_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.get("/api/rooms/{room_id}/review")
+def room_review_queue(room_id: int,
+                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_mode(conn, room_id, account["id"], "customer")
+        except RoomError as error:
+            room_error(error)
+        rows = conn.execute(
+            """SELECT t.*,u.first_name assignee_name,
+                      s.id submission_id,s.body submission,s.created_at submitted_at
+               FROM tasks t JOIN users u ON u.id=t.assignee_id
+               LEFT JOIN submissions s ON s.id=(
+                   SELECT MAX(id) FROM submissions WHERE task_id=t.id
+               )
+               WHERE t.room_id=? AND t.created_by=? AND t.status='submitted'
+               ORDER BY t.id""",
+            (room_id, account["id"]),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+@app.get("/api/rooms/{room_id}/ledger")
+def room_ledger(room_id: int,
+                x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_member(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        balance = conn.execute(
+            "SELECT COALESCE(SUM(amount_kop),0) n FROM ledger WHERE room_id=? AND user_id=?",
+            (room_id, account["id"]),
+        ).fetchone()["n"]
+        rows = conn.execute(
+            """SELECT l.*,t.title FROM ledger l LEFT JOIN tasks t ON t.id=l.task_id
+               WHERE l.room_id=? AND l.user_id=? ORDER BY l.id DESC""",
+            (room_id, account["id"]),
+        ).fetchall()
+        return {"balance_kop": balance, "entries": [dict(row) for row in rows]}
+
+
 @app.post("/api/rooms/{room_id}/tasks")
 def create_room_task(room_id: int, data: TaskIn,
                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
