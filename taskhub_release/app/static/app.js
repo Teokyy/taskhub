@@ -97,9 +97,6 @@ async function render(){
  }else if(tab==='mine'){
   const list=await api('/tasks?status=mine');view.innerHTML='<div class="section-head"><h2>Мои задачи</h2><span>'+list.length+' ВСЕГО</span></div>'+(list.length?list.map(t=>taskCard(t)).join(''):empty('Здесь пока пусто','Возьми задачу из каталога — она появится здесь.','<div class="actions" style="justify-content:center"><button class="btn" id="go-catalog">К задачам</button></div>'));document.querySelector('#go-catalog')?.addEventListener('click',()=>setTab('tasks'));bindTaskActions();
  }else if(tab==='balance'){
-  me=await api('/me');
-  const finance=await api('/rooms/'+activeRoom.id+'/ledger');me.balance_kop=finance.balance_kop;const rows=finance.entries;view.innerHTML='<div class="section-head"><h2>Финансы</h2><span>ИСТОРИЯ</span></div><section class="hero"><div class="eyebrow">ВСЕГО НАЧИСЛЕНО</div><div class="amount">'+rub(me.balance_kop)+'</div><div class="hero-foot">Внутренний баланс TaskHub</div></section><div class="panel">'+(rows.length?rows.map(x=>'<div class="ledger-row"><div><b>'+esc(x.title||x.kind)+'</b><small>'+esc(x.note||'Начисление')+' · '+esc(x.created_at)+'</small></div><b class="positive">+'+rub(x.amount_kop)+'</b></div>').join(''):empty('Начислений пока нет','После принятия задачи здесь появится запись.'))+'</div>';
- }else if(tab==='balance'){
   const finance=await api('/rooms/'+activeRoom.id+'/ledger');
   const rows=finance.entries||[];
   view.innerHTML='<div class="section-head"><h2>Финансы</h2><button class="btn ghost" id="finance-back">← Профиль</button></div><section class="hero"><div class="eyebrow">ТЕКУЩИЙ БАЛАНС</div><div class="amount">'+rub(finance.balance_kop||0)+'</div><div class="hero-foot">Начисления внутри TaskHub · выплаты выполняются отдельно</div></section><div class="panel">'+(rows.length?rows.map(x=>'<div class="ledger-row"><div><b>'+esc(x.title||x.kind)+'</b><small>'+esc(x.note||'Начисление')+' · '+esc(x.created_at)+'</small></div><b class="positive">+'+rub(x.amount_kop)+'</b></div>').join(''):empty('Начислений пока нет','После принятия задачи здесь появится запись.'))+'</div>';
@@ -115,7 +112,7 @@ async function render(){
   document.querySelector('#profile-review')?.addEventListener('click',showReview);
   document.querySelector('#profile-all-tasks')?.addEventListener('click',showAllTasks);
   view.querySelectorAll('[data-switch-room]').forEach(button=>button.addEventListener('click',async()=>{const next=rooms.find(r=>r.id===Number(button.dataset.switchRoom));if(!next)return;activeRoom=next;persistRoom(next.id);renderRoomSelector();await refreshMe();toast('Комната переключена');setTab('profile')}));
- }}
+ }
 }
 async function claim(id){try{await api('/tasks/'+id+'/claim',{method:'POST'});await refreshMe();toast('Задача закреплена за тобой');setTab('mine')}catch(e){toast(e.message)}}
 function submitForm(id){
