@@ -90,6 +90,9 @@ async def notify_telegram(telegram_id: int | None, message: str):
 async def category_digest_worker():
     """Send one deduplicated Telegram digest per subscribed user per UTC hour."""
     while True:
+        if not _bot:
+            await asyncio.sleep(20)
+            continue
         now=datetime.now(timezone.utc)
         if now.minute == 0:
             window_start=now.strftime("%Y-%m-%d %H:00:00")
@@ -1455,11 +1458,12 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
         )}
         created = conn.execute("SELECT COUNT(*) n FROM tasks WHERE room_id IS NULL AND created_by=?", (account["id"],)).fetchone()["n"]
         reputation = conn.execute("SELECT ROUND(AVG(rating),1) average,COUNT(*) review_count FROM reviews WHERE target_id=?", (account["id"],)).fetchone()
+        achievements = [dict(x) for x in conn.execute("SELECT code,earned_at FROM achievements WHERE user_id=? ORDER BY earned_at",(account["id"],)).fetchall()]
         mine = conn.execute(
             "SELECT * FROM tasks WHERE room_id IS NULL AND (created_by=? OR assignee_id=?) ORDER BY id DESC LIMIT 100",
             (account["id"], account["id"]),
         ).fetchall()
-    return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "tasks": [dict(r) for r in mine]}
+    return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "achievements": achievements, "tasks": [dict(r) for r in mine]}
 
 
 @app.get("/api/market/ledger")
