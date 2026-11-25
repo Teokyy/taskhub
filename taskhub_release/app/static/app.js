@@ -59,14 +59,8 @@ function renderRoomSelector(){
  };
 }
 async function refreshMe(){
- const roomId=activeRoom?.id;
- if(!roomId){me=await api('/me');return}
- const [profile,finance,budget,mine]=await Promise.all([
-  api('/me'),api('/rooms/'+roomId+'/ledger'),api('/rooms/'+roomId+'/budget'),api('/rooms/'+roomId+'/tasks?status=mine')
- ]);
- if(activeRoom?.id!==roomId)return;
- me=profile;me.balance_kop=finance.balance_kop;roomBudget=budget;me.counts={};
- mine.forEach(t=>me.counts[t.status]=(me.counts[t.status]||0)+1);
+ me=await api('/market/profile');
+ if(activeRoom?.id){try{roomBudget=await api('/rooms/'+activeRoom.id+'/budget')}catch{}}
 }
 function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab))}
 function setTab(next){tab=(next==='home'||next==='mine'||next==='balance')?'profile':next;nav();render()}
@@ -77,10 +71,8 @@ async function boot(){
   me=await api('/me');
   document.querySelector('#avatar').innerHTML=me.user.photo_url?'<img src="'+esc(me.user.photo_url)+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">':esc((me.user.first_name||'T').slice(0,1).toUpperCase());
   await loadRooms();
-  if(!rooms.length){showRoomOnboarding();return}
-  renderRoomSelector();await refreshMe();
-  if(!activeRoom.work_mode){showModeSetup();return}
-  document.querySelector('#role-label').textContent=isAdmin()?'ROOM ADMIN':'ROOM MEMBER';
+  renderRoomSelector();
+  await refreshMe();
   await render();
  }catch(e){
   const web=window.Telegram?.WebApp,data=web?.initData||'';
@@ -112,31 +104,33 @@ function bindTaskActions(){view.querySelectorAll('[data-claim]').forEach(b=>b.on
 async function render(){
  const renderToken=++renderSequence;
  nav();
- if(['exchange','profile','admin'].includes(tab)&&!activeRoom?.id){view.innerHTML='<div class="panel"><b>Подключаем рабочую комнату</b><p class="muted">Подожди загрузки списка комнат. Если экран не обновился, нажми «Комнаты».</p></div>';return;}
+ if(tab==='room'&&!activeRoom?.id){showRoomOnboarding();return}
+ if(tab==='room'&&activeRoom&&!activeRoom.work_mode){showModeSetup();return}
  if(tab==='room'){
   const mode=workMode()==='customer'?'Заказчик':'Исполнитель';
   view.innerHTML='<section class="hello"><div class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</div><h1>'+esc(activeRoom?.name||'Комната')+'</h1><p>Команда, участники и настройки общего пространства.</p></section><section class="panel"><div class="eyebrow">ТВОЯ РОЛЬ В КОМНАТЕ</div><div style="font-size:22px;font-weight:850;margin:7px 0">'+mode+'</div><div class="muted">'+(isAdmin()?'Владелец комнаты':'Участник комнаты')+'</div><div class="divider"></div><div class="task-bottom"><span class="muted">Рабочий режим</span><button class="btn secondary" id="room-switch-mode">Изменить</button></div></section><div class="section-head"><h2>Управление комнатой</h2></div><section class="panel"><b>Участники и доступ</b><p class="muted" style="margin:6px 0 12px">Приглашения, роли и настройки комнаты.</p><button class="btn block" id="room-manage">Открыть управление</button></section><section class="panel"><b>Работа комнаты</b><p class="muted" style="margin:6px 0 12px">Общие задачи и результаты команды доступны на бирже.</p><button class="btn secondary block" id="room-exchange">Перейти на биржу</button></section>';
   document.querySelector('#room-switch-mode').onclick=toggleWorkMode;document.querySelector('#room-manage').onclick=()=>isAdmin()?showAdminHub():toast('Управление доступно владельцу и администраторам комнаты');document.querySelector('#room-exchange').onclick=()=>setTab('exchange');
  }else if(tab==='exchange'){
-  view.innerHTML='<section class="hello"><div class="eyebrow">ТЕКУЩАЯ КОМНАТА</div><h1>Биржа</h1><p>Загружаем задачи…</p></section><div class="panel muted">Обновляем список задач</div>';
-  let list;try{list=await api('/tasks')}catch(e){if(renderToken===renderSequence)view.innerHTML=empty('Не удалось загрузить биржу',e.message,'<button class="btn secondary" onclick="render()">Повторить</button>');return}
+  view.innerHTML='<section class="hello"><div class="eyebrow">ОБЩАЯ ПЛОЩАДКА TASKHUB</div><h1>Биржа</h1><p>Публичные задания. Комната для этого не нужна.</p></section><div class="panel muted">Загружаем открытые задания…</div>';
+  let list;try{list=await api('/market/tasks')}catch(e){if(renderToken===renderSequence)view.innerHTML=empty('Не удалось загрузить биржу',e.message,'<button class="btn secondary" onclick="render()">Повторить</button>');return}
   if(renderToken!==renderSequence)return;
   const categories=[...new Set(list.map(t=>t.category||'Другое'))].sort((a,b)=>a.localeCompare(b,'ru'));
-  view.innerHTML='<section class="hello"><div class="eyebrow">ТЕКУЩАЯ КОМНАТА</div><h1>Открытые задачи</h1><p>Выбери задачу, которую готов выполнить.</p></section><div class="filter-row"><input class="field" id="task-search" style="margin:0;min-width:140px;flex:1" placeholder="Поиск по задачам"><button class="filter-chip active" data-filter="all">Все</button>'+categories.map(c=>'<button class="filter-chip" data-filter="'+esc(c)+'">'+esc(c)+'</button>').join('')+'</div><div class="filter-row"><select class="field" id="deadline-filter" style="margin:0;min-width:150px;max-width:210px"><option value="all">Любой срок</option><option value="dated">Со сроком</option><option value="none">Без срока</option><option value="overdue">Просроченные</option></select></div><div id="task-list"></div>'+(workMode()==='customer'?'<button class="btn block" id="new-task">Предложить задачу</button>':'');
+  view.innerHTML='<section class="hello"><div class="eyebrow">ОБЩАЯ ПЛОЩАДКА</div><h1>Открытые задания</h1><p>Частные задания от заказчиков и компаний.</p></section><div class="filter-row"><input class="field" id="task-search" style="margin:0;min-width:140px;flex:1" placeholder="Поиск по задачам"><button class="filter-chip active" data-filter="all">Все</button>'+categories.map(c=>'<button class="filter-chip" data-filter="'+esc(c)+'">'+esc(c)+'</button>').join('')+'</div><div class="filter-row"><select class="field" id="deadline-filter" style="margin:0;min-width:150px;max-width:210px"><option value="all">Любой срок</option><option value="dated">Со сроком</option><option value="none">Без срока</option><option value="overdue">Просроченные</option></select></div><div id="task-list"></div>'+'<button class="btn block" id="new-task">Разместить задание</button>';
   let selected='all';
   const draw=()=>{const q=(document.querySelector('#task-search')?.value||'').toLocaleLowerCase('ru');const deadlineMode=document.querySelector('#deadline-filter')?.value||'all';const today=new Date();today.setHours(0,0,0,0);const filtered=list.filter(t=>{const hasDeadline=!!t.deadline;const deadline=t.deadline?new Date(t.deadline):null;const overdue=deadline&&!Number.isNaN(deadline.getTime())&&deadline<today&&!['accepted','cancelled','rejected','not_completed'].includes(t.status);return(selected==='all'||(t.category||'Другое')===selected)&&(!q||(t.title+' '+(t.description||'')).toLocaleLowerCase('ru').includes(q))&&(deadlineMode==='all'||(deadlineMode==='dated'&&hasDeadline)||(deadlineMode==='none'&&!hasDeadline)||(deadlineMode==='overdue'&&overdue))});document.querySelector('#task-list').innerHTML=filtered.length?filtered.map(t=>taskCard(t)).join(''):empty('Задачи не найдены','Измени запрос или выбери другой срок.');bindTaskActions()};
   view.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{selected=b.dataset.filter;view.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));draw()});
   document.querySelector('#task-search').oninput=draw;document.querySelector('#deadline-filter').onchange=draw;document.querySelector('#new-task')?.addEventListener('click',createForm);draw();
  }else if(tab==='profile'){
-  view.innerHTML='<section class="hello"><h1>Профиль</h1><p>Загружаем данные комнаты…</p></section><div class="panel muted">Обновляем баланс и задачи</div>';
-  let mine;try{mine=await api('/tasks?status=mine')}catch(e){if(renderToken===renderSequence)view.innerHTML=empty('Не удалось загрузить профиль',e.message,'<button class="btn secondary" onclick="render()">Повторить</button>');return}
+  view.innerHTML='<section class="hello"><h1>Профиль</h1><p>Единый аккаунт TaskHub — не зависит от выбранной комнаты.</p></section><div class="panel muted">Загружаем профиль…</div>';
+  let profile;try{profile=await api('/market/profile')}catch(e){if(renderToken===renderSequence)view.innerHTML=empty('Не удалось загрузить профиль',e.message,'<button class="btn secondary" onclick="render()">Повторить</button>');return}
   if(renderToken!==renderSequence)return;
+  me=profile;const mine=profile.tasks||[];
   const counts={in_progress:0,submitted:0,revision:0,accepted:0,rejected:0,not_completed:0};
-  mine.forEach(t=>{if(Object.prototype.hasOwnProperty.call(counts,t.status))counts[t.status]++});
-  const stats=me.stats||{};
-  view.innerHTML='<section class="profile-row" style="margin:8px 2px 18px"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div style="min-width:0;flex:1"><div class="profile-name">'+esc(me.user.first_name||'Участник')+'</div><div class="muted">'+(isAdmin()?'Администратор':'Участник')+' · '+(workMode()==='customer'?'Заказчик':'Исполнитель')+'</div>'+(counts.accepted===0?'<span class="pill" style="margin-top:6px">Первая работа</span>':'')+'<div class="muted" style="font-size:12px;margin-top:3px">'+esc(activeRoom?.name||'')+'</div></div></section><section class="panel balance-card"><div class="task-top"><div><div class="eyebrow">МОЙ БАЛАНС</div><div style="font-size:25px;font-weight:850;margin-top:4px">'+rub(me.balance_kop||0)+'</div></div><button class="btn secondary" id="profile-finance">История</button></div></section><div class="section-head"><h2>Мои задачи</h2><span>'+mine.length+' ВСЕГО</span></div><div class="stats"><div class="stat"><small>В работе</small><strong>'+counts.in_progress+'</strong></div><div class="stat"><small>На проверке</small><strong>'+counts.submitted+'</strong></div><div class="stat"><small>На доработке</small><strong>'+counts.revision+'</strong></div><div class="stat"><small>Принято</small><strong>'+counts.accepted+'</strong></div></div><div class="section-head"><h2>Статистика</h2></div><section class="panel"><div class="ledger-row"><span class="muted">Выполнено и принято</span><b>'+counts.accepted+'</b></div><div class="ledger-row"><span class="muted">Отклонено</span><b>'+counts.rejected+'</b></div><div class="ledger-row"><span class="muted">Не выполнено</span><b>'+counts.not_completed+'</b></div></section><div class="section-head"><h2>Настройки</h2></div><section class="panel"><div class="task-bottom"><div><b>Рабочий режим</b><div class="muted" style="font-size:12px">Для этой комнаты</div></div><button class="btn secondary" id="switch-mode">Изменить</button></div><div class="divider"></div><div class="task-bottom"><div><b>Комната</b><div class="muted" style="font-size:12px">Переключение в шапке приложения</div></div><span class="pill">Активна</span></div></section>'+(isAdmin()?'<section class="panel"><div class="task-top"><div><b>Управление комнатой</b><div class="muted" style="font-size:12px">Настройки и инструменты администратора</div></div><button class="btn secondary" id="open-admin">Открыть</button></div></section>':'');
-  document.querySelector('#profile-finance').onclick=()=>showFinanceScreen();document.querySelector('#switch-mode').onclick=toggleWorkMode;document.querySelector('#open-admin')?.addEventListener('click',showAdminHub);
- }else if(tab==='admin'){
+  mine.forEach(t=>{if(t.assignee_id===me.user.id&&Object.prototype.hasOwnProperty.call(counts,t.status))counts[t.status]++});
+  view.innerHTML='<section class="profile-row" style="margin:8px 2px 18px"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div style="min-width:0;flex:1"><div class="profile-name">'+esc(me.user.first_name||'Участник')+'</div><div class="muted">Пользователь TaskHub</div></div></section><section class="panel balance-card"><div class="task-top"><div><div class="eyebrow">МОЙ БАЛАНС</div><div style="font-size:25px;font-weight:850;margin-top:4px">'+rub(me.balance_kop||0)+'</div></div><button class="btn secondary" id="profile-finance">История</button></div></section><div class="section-head"><h2>Мои задачи</h2><span>'+mine.filter(t=>t.assignee_id===me.user.id).length+' ВСЕГО</span></div><div class="stats"><div class="stat"><small>В работе</small><strong>'+counts.in_progress+'</strong></div><div class="stat"><small>На проверке</small><strong>'+counts.submitted+'</strong></div><div class="stat"><small>На доработке</small><strong>'+counts.revision+'</strong></div><div class="stat"><small>Принято</small><strong>'+counts.accepted+'</strong></div></div><div class="section-head"><h2>Мои задания как заказчика</h2><span>'+mine.filter(t=>t.created_by===me.user.id).length+'</span></div><div id="my-market-tasks">'+(mine.filter(t=>t.created_by===me.user.id).length?mine.filter(t=>t.created_by===me.user.id).map(t=>taskCard(t)).join(''):empty('Ты ещё не размещал задания','Опубликуй первое задание на общей бирже.'))+'</div><div class="section-head"><h2>Команды</h2></div><section class="panel"><p class="muted">'+(rooms.length?'Состоишь в '+rooms.length+' комнатах. Командные настройки доступны отдельно.':'Ты не состоишь в командах. Это никак не ограничивает биржу.')+'</p><button class="btn secondary block" id="profile-rooms">Открыть комнаты</button></section>';
+  document.querySelector('#profile-finance').onclick=showFinanceScreen;
+  document.querySelector('#profile-rooms').onclick=()=>setTab('room');
+}else if(tab==='admin'){
   showAdminHub();
  }
 }
