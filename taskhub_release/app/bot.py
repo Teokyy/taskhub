@@ -157,8 +157,7 @@ async def start_bot():
         with connect() as conn:
             row=conn.execute("SELECT id FROM users WHERE telegram_id=?",(message.from_user.id,)).fetchone()
             if row:
-                conn.execute("DELETE FROM subscriptions WHERE user_id=?",(row["id"],))
-                conn.execute("UPDATE users SET role_flags='none',onboarding_step=0,onboarding_skipped_at=CURRENT_TIMESTAMP WHERE id=?",(row["id"],))
+                conn.execute("UPDATE users SET onboarding_step=0,onboarding_skipped_at=CURRENT_TIMESTAMP WHERE id=?",(row["id"],))
         await open_app(message,"Квест пропущен. Роли и подписки не создавались. Ты можешь вернуться к нему командой /quest.")
 
     @dp.message(Command("tasks"))
