@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 REQUIRED_TABLES = {
     "users", "projects", "stages", "tours", "tasks", "submissions",
     "ledger", "audit", "task_criteria", "criterion_results", "disputes", "payouts",
@@ -165,8 +165,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
     # the transaction to create the legacy room and backfill all rows safely.
     additions = {
         "rooms": ("budget_limit_kop INTEGER", "budget_reserved_kop INTEGER NOT NULL DEFAULT 0", "budget_spent_kop INTEGER NOT NULL DEFAULT 0"),
-        "projects": ("room_id INTEGER REFERENCES rooms(id)",),
-        "stages": ("room_id INTEGER REFERENCES rooms(id)",),
+        "projects": ("room_id INTEGER REFERENCES rooms(id)", "budget_reserved_kop INTEGER NOT NULL DEFAULT 0", "budget_spent_kop INTEGER NOT NULL DEFAULT 0"),
+        "stages": ("room_id INTEGER REFERENCES rooms(id)", "budget_reserved_kop INTEGER NOT NULL DEFAULT 0", "budget_spent_kop INTEGER NOT NULL DEFAULT 0"),
         "tours": ("room_id INTEGER REFERENCES rooms(id)",),
         "tasks": ("room_id INTEGER REFERENCES rooms(id)",),
         "ledger": ("room_id INTEGER REFERENCES rooms(id)",),
@@ -244,7 +244,7 @@ def migrate(conn: sqlite3.Connection) -> dict:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_payouts_room_period ON payouts(room_id,period_start,period_end)")
     conn.execute(
         "INSERT INTO schema_migrations(version,name) VALUES(?,?)",
-        (SCHEMA_VERSION, "introduce_rooms_and_room_scoped_records"),
+        (SCHEMA_VERSION, "project_and_stage_budget_counters"),
     )
     return {"status": "migrated", "version": SCHEMA_VERSION, "legacy_room_id": room_id}
 
