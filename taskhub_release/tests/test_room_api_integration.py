@@ -25,7 +25,8 @@ class RoomApiIntegrationTests(unittest.TestCase):
         with db.connect() as conn:
             conn.executemany(
                 "INSERT INTO users(telegram_id,username,first_name,role) VALUES(?,?,?,?)",
-                [(101, "owner", "Owner", "admin"), (202, "worker", "Worker", "helper")],
+                [(101, "owner", "Owner", "admin"), (202, "worker", "Worker", "helper"),
+                 (303, "reviewer", "Reviewer", "helper")],
             )
         with sqlite3.connect(self.db_path) as conn:
             conn.row_factory = sqlite3.Row
@@ -35,6 +36,7 @@ class RoomApiIntegrationTests(unittest.TestCase):
             self.accounts = {
                 "owner-token": dict(conn.execute("SELECT * FROM users WHERE telegram_id=101").fetchone()),
                 "worker-token": dict(conn.execute("SELECT * FROM users WHERE telegram_id=202").fetchone()),
+                "reviewer-token": dict(conn.execute("SELECT * FROM users WHERE telegram_id=303").fetchone()),
             }
         self.user_patch = patch.object(main, "user", side_effect=lambda token: self.accounts[token])
         self.user_patch.start()
@@ -200,6 +202,137 @@ class RoomApiIntegrationTests(unittest.TestCase):
             ).fetchone()
         self.assertEqual(tuple(row), ("pending", 0))
         self.assertEqual(tuple(stage_row), (0, 0))
+
+
+    def test_only_task_creator_can_review_submission(self):
+        owner = self.headers("owner-token")
+        worker = self.headers("worker-token")
+        reviewer = self.headers("reviewer-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        for token, mode in (("owner-token", "customer"), ("worker-token", "executor"),
+                            ("reviewer-token", "customer")):
+            self.assertEqual(self.client.put(
+                f"/api/rooms/{room_id}/mode", headers=self.headers(token),
+                json={"mode": mode},
+            ).status_code, 200)
+        task = self.client.post(
+            f"/api/rooms/{room_id}/tasks", headers=owner,
+            json={"title": "Creator-only review", "reward_rub": 10,
+                  "pricing_model": "fixed"},
+        ).json()
+        task_id = task["id"]
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/moderate", headers=owner,
+            json={"decision": "approve", "comment": ""},
+        ).status_code, 200)
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/claim", headers=worker
+        ).status_code, 200)
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/submit", headers=worker,
+            json={"body": "Ready"},
+        ).status_code, 200)
+        self.assertEqual(self.client.get(
+            f"/api/rooms/{room_id}/review", headers=reviewer
+        ).json(), [])
+        denied = self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/review", headers=reviewer,
+            json={"decision": "accept", "quality": "good", "comment": ""},
+        )
+        self.assertEqual(denied.status_code, 403)
+
+    def test_quality_bonus_over_room_limit_rolls_back_acceptance(self):
+        owner = self.headers("owner-token")
+        worker = self.headers("worker-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        self.client.put(f"/api/rooms/{room_id}/mode", headers=owner,
+                        json={"mode": "customer"})
+        self.client.put(f"/api/rooms/{room_id}/mode", headers=worker,
+                        json={"mode": "executor"})
+        self.assertEqual(self.client.put(
+            f"/api/rooms/{room_id}/budget", headers=owner,
+            json={"limit_rub": 50},
+        ).status_code, 200)
+        task = self.client.post(
+            f"/api/rooms/{room_id}/tasks", headers=owner,
+            json={"title": "Bonus above cap", "reward_rub": 50,
+                  "pricing_model": "fixed"},
+        ).json()
+        task_id = task["id"]
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/moderate", headers=owner,
+            json={"decision": "approve", "comment": ""},
+        ).status_code, 200)
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/claim", headers=worker
+        ).status_code, 200)
+        self.assertEqual(self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/submit", headers=worker,
+            json={"body": "Done"},
+        ).status_code, 200)
+        rejected_by_budget = self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_id}/review", headers=owner,
+            json={"decision": "accept", "quality": "outstanding",
+                  "comment": "Excellent"},
+        )
+        self.assertEqual(rejected_by_budget.status_code, 409)
+        with db.connect() as conn:
+            task_row = conn.execute(
+                "SELECT status,budget_reserved_kop FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            room = conn.execute(
+                "SELECT budget_reserved_kop,budget_spent_kop FROM rooms WHERE id=?", (room_id,)
+            ).fetchone()
+            ledger_count = conn.execute(
+                "SELECT COUNT(*) FROM ledger WHERE task_id=?", (task_id,)
+            ).fetchone()[0]
+        self.assertEqual(tuple(task_row), ("submitted", 5000))
+        self.assertEqual(tuple(room), (5000, 0))
+        self.assertEqual(ledger_count, 0)
+
+    def test_direct_project_tasks_cannot_spend_stage_allocations(self):
+        owner = self.headers("owner-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        self.client.put(f"/api/rooms/{room_id}/mode", headers=owner,
+                        json={"mode": "customer"})
+        project = self.client.post(
+            f"/api/rooms/{room_id}/projects", headers=owner,
+            json={"title": "Ring-fenced project", "description": "", "budget_rub": 100},
+        ).json()
+        self.client.post(
+            f"/api/rooms/{room_id}/projects/{project['id']}/stages", headers=owner,
+            json={"title": "Allocated stage", "description": "", "budget_rub": 60},
+        )
+        task_ids = []
+        for title in ("Direct task one", "Direct task two"):
+            task = self.client.post(
+                f"/api/rooms/{room_id}/tasks", headers=owner,
+                json={"title": title, "reward_rub": 40, "pricing_model": "fixed",
+                      "project_id": project["id"]},
+            )
+            self.assertEqual(task.status_code, 200, task.text)
+            task_ids.append(task.json()["id"])
+        first = self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_ids[0]}/moderate", headers=owner,
+            json={"decision": "approve", "comment": ""},
+        )
+        second = self.client.post(
+            f"/api/rooms/{room_id}/tasks/{task_ids[1]}/moderate", headers=owner,
+            json={"decision": "approve", "comment": ""},
+        )
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 409)
+        with db.connect() as conn:
+            project_row = conn.execute(
+                "SELECT budget_reserved_kop,budget_spent_kop FROM projects WHERE id=?",
+                (project["id"],),
+            ).fetchone()
+            pending = conn.execute(
+                "SELECT status,budget_reserved_kop FROM tasks WHERE id=?", (task_ids[1],)
+            ).fetchone()
+        self.assertEqual(tuple(project_row), (4000, 0))
+        self.assertEqual(tuple(pending), ("pending", 0))
+
 
 
 if __name__ == "__main__":
