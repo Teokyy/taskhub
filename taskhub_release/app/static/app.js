@@ -3,7 +3,7 @@ tg?.ready();tg?.expand();
 const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
-let me=null,tab='home',toastTimer,rooms=[],activeRoom=null;
+let me=null,tab='home',toastTimer,rooms=[],activeRoom=null,roomBudget=null;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
@@ -45,7 +45,7 @@ function renderRoomSelector(){
  host.innerHTML='<select id="room-select" class="room-select" aria-label="Рабочая комната">'+rooms.map(r=>'<option value="'+r.id+'" '+(r.id===activeRoom.id?'selected':'')+'>'+esc(r.name)+'</option>').join('')+'</select>';
  document.querySelector('#room-select').onchange=async e=>{activeRoom=rooms.find(r=>r.id===Number(e.target.value));persistRoom(activeRoom.id);await refreshMe();setTab('home')};
 }
-async function refreshMe(){me=await api('/me');if(activeRoom){const finance=await api('/rooms/'+activeRoom.id+'/ledger');me.balance_kop=finance.balance_kop;const mine=await api('/rooms/'+activeRoom.id+'/tasks?status=mine');me.counts={};mine.forEach(t=>me.counts[t.status]=(me.counts[t.status]||0)+1)}}
+async function refreshMe(){me=await api('/me');if(activeRoom){const finance=await api('/rooms/'+activeRoom.id+'/ledger');me.balance_kop=finance.balance_kop;roomBudget=await api('/rooms/'+activeRoom.id+'/budget');const mine=await api('/rooms/'+activeRoom.id+'/tasks?status=mine');me.counts={};mine.forEach(t=>me.counts[t.status]=(me.counts[t.status]||0)+1)}}
 function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab))}
 function setTab(next){tab=next;nav();render()}
 function greeting(){const h=new Date().getHours();return h<6?'Доброй ночи':h<12?'Доброе утро':h<18?'Добрый день':'Добрый вечер'}
