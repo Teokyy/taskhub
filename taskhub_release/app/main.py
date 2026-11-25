@@ -1159,7 +1159,7 @@ def me(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Dat
             # Financial totals and task counts must always be requested with a room context.
             return {"user": account, "balance_kop": 0, "counts": {}}
         balance = conn.execute("SELECT COALESCE(SUM(amount_kop),0) n FROM ledger WHERE user_id=?", (account["id"],)).fetchone()["n"]
-        counts = {r["status"]: r["n"] for r in conn.execute("SELECT status,COUNT(*) n FROM tasks WHERE assignee_id=? GROUP BY status", (account["id"],))}
+        counts = {r["status"]: r["n"] for r in conn.execute("SELECT status,COUNT(*) n FROM tasks WHERE room_id IS NULL AND assignee_id=? GROUP BY status", (account["id"],))}
     return {"user": account, "balance_kop": balance, "counts": counts}
 
 
@@ -1334,9 +1334,9 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
         counts = {r["status"]: r["n"] for r in conn.execute(
             "SELECT status,COUNT(*) n FROM tasks WHERE assignee_id=? GROUP BY status", (account["id"],)
         )}
-        created = conn.execute("SELECT COUNT(*) n FROM tasks WHERE created_by=?", (account["id"],)).fetchone()["n"]
+        created = conn.execute("SELECT COUNT(*) n FROM tasks WHERE room_id IS NULL AND created_by=?", (account["id"],)).fetchone()["n"]
         mine = conn.execute(
-            "SELECT * FROM tasks WHERE created_by=? OR assignee_id=? ORDER BY id DESC LIMIT 100",
+            "SELECT * FROM tasks WHERE room_id IS NULL AND (created_by=? OR assignee_id=?) ORDER BY id DESC LIMIT 100",
             (account["id"], account["id"]),
         ).fetchall()
     return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "tasks": [dict(r) for r in mine]}
@@ -1489,9 +1489,9 @@ def delete_market_task(task_id: int, x_telegram_init_data: str = Header(default=
         task = conn.execute("SELECT * FROM tasks WHERE id=? AND room_id IS NULL AND created_by=?", (task_id, account["id"])).fetchone()
         if not task:
             raise HTTPException(404, "Твоё задание не найдено")
-        if task["status"] != "available" or task["assignee_id"] is not None:
+        if task["status"] not in ("open", "available") or task["assignee_id"] is not None:
             raise HTTPException(409, "Нельзя удалить задание, которое уже взяли в работу или начали выполнять")
-        conn.execute("UPDATE tasks SET status='cancelled',updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND status='available'", (task_id, account["id"]))
+        conn.execute("UPDATE tasks SET status='cancelled',updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND status IN ('open','available')", (task_id, account["id"]))
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "delete_market_task", "task", task_id, "soft_delete"))
     return {"ok": True}
 
