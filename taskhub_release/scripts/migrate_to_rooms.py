@@ -15,7 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 REQUIRED_TABLES = {
     "users", "projects", "stages", "tours", "tasks", "submissions",
     "ledger", "audit", "task_criteria", "criterion_results", "disputes", "payouts",
@@ -59,6 +59,8 @@ def create_schema(conn: sqlite3.Connection) -> None:
         payout_day INTEGER NOT NULL DEFAULT 15 CHECK(payout_day BETWEEN 1 AND 28),
         payout_calendar_region TEXT NOT NULL DEFAULT 'RU',
         moderation_enabled INTEGER NOT NULL DEFAULT 1 CHECK(moderation_enabled IN (0,1)),
+        budget_limit_kop INTEGER CHECK(budget_limit_kop IS NULL OR budget_limit_kop>=0),
+        budget_reserved_kop INTEGER NOT NULL DEFAULT 0 CHECK(budget_reserved_kop>=0),
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         archived_at TEXT
     );
@@ -125,6 +127,17 @@ def create_schema(conn: sqlite3.Connection) -> None:
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS budget_events (
+        id INTEGER PRIMARY KEY,
+        room_id INTEGER NOT NULL REFERENCES rooms(id),
+        task_id INTEGER REFERENCES tasks(id),
+        actor_id INTEGER REFERENCES users(id),
+        event_type TEXT NOT NULL CHECK(event_type IN ('limit_changed','reserved','released','spent')),
+        amount_kop INTEGER NOT NULL,
+        details TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE TABLE IF NOT EXISTS task_deadline_events (
         id INTEGER PRIMARY KEY,
         task_id INTEGER NOT NULL REFERENCES tasks(id),
@@ -142,6 +155,7 @@ def create_schema(conn: sqlite3.Connection) -> None:
     # Additive columns retain existing IDs and records. Nullable room_id permits
     # the transaction to create the legacy room and backfill all rows safely.
     additions = {
+        "rooms": ("budget_limit_kop INTEGER", "budget_reserved_kop INTEGER NOT NULL DEFAULT 0"),
         "projects": ("room_id INTEGER REFERENCES rooms(id)",),
         "stages": ("room_id INTEGER REFERENCES rooms(id)",),
         "tours": ("room_id INTEGER REFERENCES rooms(id)",),
@@ -217,6 +231,7 @@ def migrate(conn: sqlite3.Connection) -> dict:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_stages_room ON stages(room_id,project_id,id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_room_status ON tasks(room_id,status,id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_room_user ON ledger(room_id,user_id,id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_budget_events_room ON budget_events(room_id,id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_payouts_room_period ON payouts(room_id,period_start,period_end)")
     conn.execute(
         "INSERT INTO schema_migrations(version,name) VALUES(?,?)",
