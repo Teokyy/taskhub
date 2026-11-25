@@ -135,9 +135,11 @@ def current_user(init_data: str):
     role = "admin" if telegram_id in admin_ids or (dev_mode and telegram_id == 999000) else "helper"
     with connect() as conn:
         conn.execute(
-            """INSERT INTO users(telegram_id, username, first_name, role) VALUES(?,?,?,?)
-            ON CONFLICT(telegram_id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, role=excluded.role""",
-            (telegram_id, telegram_user.get("username"), telegram_user.get("first_name", ""), role),
+            """INSERT INTO users(telegram_id, username, first_name, role, photo_url) VALUES(?,?,?,?,?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                username=excluded.username, first_name=excluded.first_name, role=excluded.role,
+                photo_url=COALESCE(excluded.photo_url, users.photo_url)""",
+            (telegram_id, telegram_user.get("username"), telegram_user.get("first_name", ""), role, telegram_user.get("photo_url")),
         )
         return dict(conn.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,)).fetchone())
 
@@ -249,7 +251,7 @@ def tasks(status: str = "available", x_telegram_init_data: str = Header(default=
         if status=="mine": rows=conn.execute("SELECT * FROM tasks WHERE assignee_id=? ORDER BY id DESC",(account["id"],)).fetchall()
         elif status=="all":
             admin(account)
-            rows=conn.execute("SELECT t.*,u.first_name assignee_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id ORDER BY t.id DESC").fetchall()
+            rows=conn.execute("SELECT t.*,u.first_name assignee_name,cu.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.assignee_id LEFT JOIN users cu ON cu.id=t.created_by ORDER BY t.id DESC").fetchall()
         elif status=="available": rows=conn.execute("SELECT * FROM tasks WHERE status='available' ORDER BY id DESC").fetchall()
         elif status in {"in_progress","submitted","revision","accepted","rejected","cancelled","not_completed"}:
             admin(account); rows=conn.execute("SELECT * FROM tasks WHERE status=? ORDER BY id DESC",(status,)).fetchall()
