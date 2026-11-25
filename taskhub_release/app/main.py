@@ -230,6 +230,15 @@ class TaskIn(BaseModel):
         return self
 
 
+class MarketTaskUpdate(TaskIn):
+    pass
+
+
+class MarketNotificationPrefs(BaseModel):
+    categories: list[str] = Field(default_factory=list, max_length=100)
+    enabled: bool = True
+
+
 class SubmitIn(BaseModel):
     body: str = Field(min_length=1, max_length=10000)
 
@@ -1244,7 +1253,74 @@ def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(default=
             "INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
             (account["id"], "publish_market_task", "task", task_id, "public_marketplace"),
         )
+        task_row = dict(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+        import json
+        subscribers = conn.execute("SELECT u.telegram_id,p.categories FROM market_notification_preferences p JOIN users u ON u.id=p.user_id WHERE p.enabled=1 AND p.user_id<>?", (account["id"],)).fetchall()
+    for subscriber in subscribers:
+        try:
+            subscribed = json.loads(subscriber["categories"] or "[]")
+        except Exception:
+            subscribed = []
+        if any(task_row["category"] == c or task_row["category"].startswith(c + " / ") for c in subscribed):
+            await notify_telegram(subscriber["telegram_id"], f"🆕 Новое задание в категории «{task_row['category']}»: {task_row['title']} · {task_row['reward_kop']/100:.0f} ₽")
+    return task_row
+
+
+@app.put("/api/market/tasks/{task_id}")
+def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    if data.project_id or data.stage_id or data.tour_id:
+        raise HTTPException(400, "Публичные задания не привязываются к проектам комнаты")
+    reward = task_base_reward(data)
+    with connect() as conn:
+        task = conn.execute("SELECT * FROM tasks WHERE id=? AND room_id IS NULL AND created_by=?", (task_id, account["id"])).fetchone()
+        if not task:
+            raise HTTPException(404, "Твоё задание не найдено")
+        if task["status"] != "available":
+            raise HTTPException(409, "Редактировать можно только открытое задание. Сначала заверши или отмени текущую работу.")
+        conn.execute("""UPDATE tasks SET title=?,description=?,category=?,reward_kop=?,deadline=?,pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND room_id IS NULL AND status='available'""",
+            (data.title.strip(), data.description.strip(), data.category.strip(), reward, data.deadline, data.pricing_model, data.norm_minutes, data.difficulty, data.urgency, reward, task_id, account["id"]))
+        conn.execute("DELETE FROM task_criteria WHERE task_id=?", (task_id,))
+        for pos, item in enumerate(data.criteria):
+            conn.execute("INSERT INTO task_criteria(task_id,title,weight,critical,position) VALUES(?,?,?,?,?)", (task_id, item.title.strip(), item.weight, int(item.critical), pos))
+        conn.execute("UPDATE tasks SET criteria_frozen=1 WHERE id=?", (task_id,))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "edit_market_task", "task", task_id, "public_marketplace"))
         return dict(conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone())
+
+
+@app.delete("/api/market/tasks/{task_id}")
+def delete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        task = conn.execute("SELECT * FROM tasks WHERE id=? AND room_id IS NULL AND created_by=?", (task_id, account["id"])).fetchone()
+        if not task:
+            raise HTTPException(404, "Твоё задание не найдено")
+        if task["status"] != "available" or task["assignee_id"] is not None:
+            raise HTTPException(409, "Нельзя удалить задание, которое уже взяли в работу или начали выполнять")
+        conn.execute("UPDATE tasks SET status='cancelled',updated_at=CURRENT_TIMESTAMP WHERE id=? AND created_by=? AND status='available'", (task_id, account["id"]))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)", (account["id"], "delete_market_task", "task", task_id, "soft_delete"))
+    return {"ok": True}
+
+
+@app.get("/api/market/notification-preferences")
+def get_market_notification_preferences(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    import json
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        row = conn.execute("SELECT categories,enabled FROM market_notification_preferences WHERE user_id=?", (account["id"],)).fetchone()
+    return {"categories": json.loads(row["categories"]) if row else [], "enabled": bool(row["enabled"]) if row else False}
+
+
+@app.put("/api/market/notification-preferences")
+def set_market_notification_preferences(data: MarketNotificationPrefs, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    import json
+    account = user(x_telegram_init_data)
+    categories = list(dict.fromkeys(x.strip() for x in data.categories if x.strip()))
+    with connect() as conn:
+        conn.execute("""INSERT INTO market_notification_preferences(user_id,categories,enabled,updated_at) VALUES(?,?,?,CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET categories=excluded.categories,enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP""",
+            (account["id"], json.dumps(categories, ensure_ascii=False), int(data.enabled)))
+    return {"ok": True, "categories": categories, "enabled": data.enabled}
 
 
 @app.post("/api/market/tasks/{task_id}/claim")
