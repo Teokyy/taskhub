@@ -132,9 +132,15 @@ function taskCard(t,adminView=false){
   else action='<button class="btn secondary" data-view-responses="'+t.id+'">Отклики</button><button class="btn secondary" data-edit-market="'+t.id+'">Редактировать</button><button class="btn danger" data-delete-market="'+t.id+'">Снять с публикации</button>';
  }
  if(marketTask&&t.status==='in_progress'){
-  if(own)action='<button class="btn" data-complete-market="'+t.id+'">Подтвердить выполнение</button><button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button><button class="btn secondary" data-edit-market="'+t.id+'">Изменить описание/срок</button><button class="btn danger" data-cancel-deal="'+t.id+'">Запросить отмену</button>';
-  if(executor)action='<button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button><button class="btn danger" data-cancel-deal="'+t.id+'">Запросить отмену</button>';
+  if(own)action='<button class="btn" data-complete-market="'+t.id+'">Подтвердить выполнение</button><button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button><button class="btn secondary" data-edit-market="'+t.id+'">Изменить описание/срок</button>';
+  if(executor)action='<button class="btn secondary" data-open-deal-chat="'+t.id+'">Открыть чат</button>';
   if(own||executor)action+='<button class="btn danger" data-dispute-market="'+t.id+'">Пожаловаться</button>';
+  if(own||executor){
+   if(t.cancel_requested_by){
+    if(Number(t.cancel_requested_by)===Number(me.user.id))action+='<div class="muted">Запрос на отмену отправлен. Ждём ответа второй стороны.</div>';
+    else action+='<button class="btn" data-cancel-deal="'+t.id+'">Подтвердить отмену</button><button class="btn danger" data-cancel-reject="'+t.id+'">Отклонить отмену</button>';
+   }else action+='<button class="btn danger" data-cancel-deal="'+t.id+'">Запросить отмену</button>';
+  }
  }
  if(marketTask&&t.status==='done'&&(own||executor))action='<button class="btn secondary" data-review-task="'+t.id+'">Оставить отзыв</button>';
  if(!marketTask&&t.status==='available'&&workMode()==='executor'&&!own)action='<button class="btn" data-claim="'+t.id+'">Взять задачу</button>';
@@ -153,6 +159,7 @@ function bindTaskActions(){
  view.querySelectorAll('[data-view-responses]').forEach(b=>b.onclick=()=>showMarketResponses(b.dataset.viewResponses));
  view.querySelectorAll('[data-complete-market]').forEach(b=>b.onclick=()=>completeMarketTask(b.dataset.completeMarket));
  view.querySelectorAll('[data-cancel-deal]').forEach(b=>b.onclick=()=>requestDealCancellation(b.dataset.cancelDeal));
+ view.querySelectorAll('[data-cancel-reject]').forEach(b=>b.onclick=async()=>{if(!confirm('Отклонить запрос на отмену сделки?'))return;try{await api('/market/tasks/'+b.dataset.cancelReject+'/cancel-request/reject',{method:'POST'});toast('Запрос отклонён');await render()}catch(e){toast(e.message)}});
  view.querySelectorAll('[data-open-deal-chat]').forEach(b=>b.onclick=()=>showDealChatByTask(b.dataset.openDealChat));
  view.querySelectorAll('[data-dispute-market]').forEach(b=>b.onclick=()=>createMarketDispute(b.dataset.disputeMarket));
  view.querySelectorAll('[data-review-task]').forEach(b=>b.onclick=()=>createMarketReview(b.dataset.reviewTask));
