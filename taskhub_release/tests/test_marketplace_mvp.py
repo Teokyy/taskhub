@@ -299,7 +299,12 @@ class MarketplaceMvpTests(unittest.TestCase):
             f"/api/market/chats/{chat_id}/messages",
             headers=self.headers("executor"),
         )
-        self.assertEqual(own_history.json(), [])
+        self.assertEqual(len(own_history.json()), 1)
+        customer_history = self.client.get(
+            f"/api/market/chats/{chat_id}/messages",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(customer_history.json(), [])
         dispute = self.client.post(
             f"/api/market/tasks/{task_id}/disputes",
             headers=self.headers("executor"),
