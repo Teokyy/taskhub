@@ -190,6 +190,31 @@ def init_db():
         )
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS market_services(
+                id INTEGER PRIMARY KEY,
+                seller_id INTEGER NOT NULL REFERENCES users(id),
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL,
+                price_kop INTEGER NOT NULL CHECK(price_kop>0),
+                delivery_minutes INTEGER NOT NULL DEFAULT 60,
+                active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0,1)),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS market_service_orders(
+                id INTEGER PRIMARY KEY,
+                service_id INTEGER NOT NULL REFERENCES market_services(id),
+                buyer_id INTEGER NOT NULL REFERENCES users(id),
+                seller_id INTEGER NOT NULL REFERENCES users(id),
+                details TEXT NOT NULL DEFAULT '',
+                price_kop INTEGER NOT NULL CHECK(price_kop>0),
+                status TEXT NOT NULL DEFAULT 'created' CHECK(status IN ('created','accepted','delivered','completed','cancelled')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_market_services_active ON market_services(active,category);
+            CREATE INDEX IF NOT EXISTS idx_market_service_orders_users ON market_service_orders(buyer_id,seller_id,status);
             CREATE TABLE IF NOT EXISTS market_notification_preferences(
                 user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                 categories TEXT NOT NULL DEFAULT '[]',
