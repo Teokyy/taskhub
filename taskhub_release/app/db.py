@@ -166,6 +166,10 @@ def init_db():
             "fixed_reward_kop INTEGER NOT NULL DEFAULT 0",
             "criteria_frozen INTEGER NOT NULL DEFAULT 0",
             "budget_reserved_kop INTEGER NOT NULL DEFAULT 0",
+            "moderation_status TEXT NOT NULL DEFAULT 'approved'",
+            "moderation_comment TEXT NOT NULL DEFAULT ''",
+            "moderated_by INTEGER REFERENCES users(id)",
+            "moderated_at TEXT",
         ):
             _add_column(conn, "tasks", definition)
         conn.execute(
