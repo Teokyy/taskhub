@@ -200,6 +200,107 @@ class MarketplaceMvpTests(unittest.TestCase):
         )
         self.assertEqual(locked_title.status_code, 409)
 
+
+    def test_other_category_creates_request_and_admin_can_resolve(self):
+        tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
+        other = next(x for x in tree if x["name"] == "Другое")
+        misc = other["children"][0]
+        payload = {
+            "title": "Specialized service",
+            "description": "Need a niche service",
+            "category_id": misc["id"],
+            "category": "Другое / Прочее",
+            "other_category_text": "Custom community management",
+            "reward_rub": 900,
+            "pricing_model": "fixed",
+        }
+        created = self.client.post("/api/market/tasks", headers=self.headers("customer"), json=payload)
+        self.assertEqual(created.status_code, 200, created.text)
+        requests = self.client.get("/api/category-requests", headers=self.headers("customer"))
+        self.assertEqual(requests.status_code, 200, requests.text)
+        request_id = requests.json()[0]["id"]
+        tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
+        marketing = next(x for x in tree if x["name"] == "Маркетинг")
+        new_category = self.client.post(
+            "/api/categories",
+            headers=self.headers("customer"),
+            json={"name": "Community management", "parent_id": marketing["id"]},
+        )
+        self.assertEqual(new_category.status_code, 200, new_category.text)
+        resolved = self.client.post(
+            f"/api/category-requests/{request_id}/resolve",
+            headers=self.headers("customer"),
+            json={"status": "added", "category_id": new_category.json()["id"], "note": "Added"},
+        )
+        self.assertEqual(resolved.status_code, 200, resolved.text)
+
+    def test_mutual_cancellation_closes_deal_and_chat(self):
+        task_id = self.create_task()
+        response = self.client.post(
+            f"/api/market/tasks/{task_id}/responses",
+            headers=self.headers("executor"),
+            json={"message": "Available"},
+        )
+        accepted = self.client.post(
+            f"/api/market/responses/{response.json()['id']}/accept",
+            headers=self.headers("customer"),
+        )
+        chat_id = accepted.json()["chat_id"]
+        first = self.client.post(
+            f"/api/market/tasks/{task_id}/cancel-request",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(first.json()["status"], "pending")
+        second = self.client.post(
+            f"/api/market/tasks/{task_id}/cancel-request",
+            headers=self.headers("executor"),
+        )
+        self.assertEqual(second.json()["status"], "cancelled")
+        with db.connect() as conn:
+            task = conn.execute("SELECT status FROM tasks WHERE id=?", (task_id,)).fetchone()
+            chat = conn.execute("SELECT closed_at FROM chats WHERE id=?", (chat_id,)).fetchone()
+        self.assertEqual(task["status"], "cancelled")
+        self.assertIsNotNone(chat["closed_at"])
+
+    def test_dispute_moderator_can_read_full_chat_and_resolve(self):
+        task_id = self.create_task()
+        response = self.client.post(
+            f"/api/market/tasks/{task_id}/responses",
+            headers=self.headers("executor"),
+            json={"message": "I can start"},
+        )
+        accepted = self.client.post(
+            f"/api/market/responses/{response.json()['id']}/accept",
+            headers=self.headers("customer"),
+        )
+        chat_id = accepted.json()["chat_id"]
+        self.client.post(
+            f"/api/market/chats/{chat_id}/messages",
+            headers=self.headers("executor"),
+            json={"body": "Conversation visible to moderator"},
+        )
+        dispute = self.client.post(
+            f"/api/market/tasks/{task_id}/disputes",
+            headers=self.headers("executor"),
+            json={"reason": "The customer changed the scope"},
+        )
+        self.assertEqual(dispute.status_code, 200, dispute.text)
+        queue = self.client.get("/api/moderation/disputes", headers=self.headers("customer"))
+        self.assertEqual(queue.status_code, 200, queue.text)
+        dispute_id = queue.json()[0]["id"]
+        transcript = self.client.get(
+            f"/api/moderation/disputes/{dispute_id}/chat",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(transcript.status_code, 200, transcript.text)
+        self.assertEqual(len(transcript.json()), 1)
+        resolved = self.client.post(
+            f"/api/moderation/disputes/{dispute_id}/resolve",
+            headers=self.headers("customer"),
+            json={"decision": "cancelled", "comment": "Resolved by moderator"},
+        )
+        self.assertEqual(resolved.status_code, 200, resolved.text)
+
     def test_subscriptions_are_limited_to_twenty(self):
         tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
         ids = [child["id"] for parent in tree for child in parent["children"]]
