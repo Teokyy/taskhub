@@ -72,5 +72,17 @@
   </div></nav>
   <div id="toast" class="toast" hidden></div>
   <script src="/static/app.js?v=5"></script>
+  <script>
+    document.addEventListener('click', async event => {
+      const button = event.target.closest('[data-refuse]');
+      if (!button || !activeRoom) return;
+      if (!confirm('Отказаться от этой задачи? Она снова станет доступна участникам комнаты.')) return;
+      button.disabled = true;
+      try {
+        await api('/rooms/' + activeRoom.id + '/tasks/' + button.dataset.refuse + '/refuse', {method:'POST'});
+        await refreshMe(); toast('Ты отказался от задачи'); setTab('mine');
+      } catch (error) { toast(error.message); button.disabled = false; }
+    });
+  </script>
 </body>
 </html>
