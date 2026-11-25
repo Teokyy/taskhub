@@ -160,7 +160,7 @@ class RoomApiIntegrationTests(unittest.TestCase):
         self.assertEqual(second_room.status_code, 200)
         other_id = second_room.json()["id"]
         self.assertEqual(self.client.get(
-            f"/api/rooms/{room_id}/budget", headers=worker
+            f"/api/rooms/{other_id}/budget", headers=owner
         ).status_code, 403)
         self.assertEqual(self.client.get("/api/tasks", headers=owner).status_code, 410)
         self.assertEqual(self.client.get(
