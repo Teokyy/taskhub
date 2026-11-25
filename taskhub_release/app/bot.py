@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command, CommandStart
 from datetime import datetime, timezone
 import hashlib
@@ -10,6 +10,7 @@ from .db import connect
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    CallbackQuery,
     MenuButtonWebApp,
     Message,
     WebAppInfo,
@@ -80,18 +81,148 @@ async def start_bot():
             log.exception("TELEGRAM_ROOM_CONNECT_FAILED")
             await message.answer("Не удалось подключить группу. Создай новый код в TaskHub.")
 
-    @dp.message(CommandStart())
+    async def open_app(message: Message, text: str):
+        keyboard=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🚀 Открыть TaskHub",web_app=web_app)]
+        ])
+        await message.answer(text,reply_markup=keyboard)
 
-    async def start(message: Message):
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🚀 Открыть TaskHub", web_app=web_app)]
-            ]
-        )
+    async def show_quest_intro(message: Message):
+        keyboard=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎮 Начать квест",callback_data="quest:start")],
+            [InlineKeyboardButton(text="Пропустить",callback_data="quest:skip")]
+        ])
         await message.answer(
-            "Добро пожаловать в TaskHub! Нажми кнопку ниже, чтобы открыть приложение.",
-            reply_markup=keyboard,
+            "Привет! Я Квестовик, бот площадки заданий. Здесь заказчики находят исполнителей, а исполнители — работу.\n\nПройди 3 шага за 2–3 минуты и настрой свою ленту.",
+            reply_markup=keyboard
         )
+
+    async def show_category_step(target):
+        with connect() as conn:
+            user_row=conn.execute("SELECT id FROM users WHERE telegram_id=?",(target.from_user.id,)).fetchone()
+            categories=conn.execute("SELECT id,name FROM categories WHERE parent_id IS NULL AND is_hidden=0 ORDER BY id").fetchall()
+            selected={x["category_id"] for x in conn.execute("SELECT category_id FROM subscriptions WHERE user_id=?",(user_row["id"],)).fetchall()}
+        buttons=[]
+        for category in categories:
+            mark="✅ " if category["id"] in selected else ""
+            buttons.append([InlineKeyboardButton(text=mark+category["name"],callback_data=f"quest:category:{category['id']}")])
+        buttons.append([InlineKeyboardButton(text="Готово →",callback_data="quest:categories_done")])
+        await target.answer("Шаг 2 из 3 — выбери направления, о которых сообщать. Можно несколько.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+    async def show_first_action(target):
+        with connect() as conn:
+            row=conn.execute("SELECT role_flags FROM users WHERE telegram_id=?",(target.from_user.id,)).fetchone()
+        role_flags=(row["role_flags"] if row else "both")
+        buttons=[]
+        if role_flags in ("customer","both"):
+            buttons.append([InlineKeyboardButton(text="➕ Создать задание",web_app=web_app)])
+        if role_flags in ("executor","both"):
+            buttons.append([InlineKeyboardButton(text="🔎 Открыть ленту",web_app=web_app)])
+        buttons.append([InlineKeyboardButton(text="Завершить квест",callback_data="quest:finish")])
+        await target.answer("Шаг 3 из 3 — сделай первое действие. Можно открыть приложение и вернуться сюда позже.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+    @dp.message(CommandStart())
+    async def start(message: Message):
+        telegram_user=message.from_user
+        with connect() as conn:
+            conn.execute("""INSERT INTO users(telegram_id,username,first_name,role)
+                VALUES(?,?,?,'helper') ON CONFLICT(telegram_id) DO UPDATE SET
+                username=excluded.username,first_name=excluded.first_name""",
+                (telegram_user.id,telegram_user.username,telegram_user.first_name or ""))
+            row=conn.execute("SELECT onboarding_step,onboarding_completed_at FROM users WHERE telegram_id=?",(telegram_user.id,)).fetchone()
+        if row["onboarding_completed_at"]:
+            await open_app(message,"С возвращением в TaskHub! Открой приложение или выбери команду бота.")
+        elif row["onboarding_step"]==2:
+            await show_category_step(message)
+        elif row["onboarding_step"]==3:
+            await show_first_action(message)
+        else:
+            await show_quest_intro(message)
+
+    @dp.message(Command("quest"))
+    async def quest_command(message: Message):
+        with connect() as conn:
+            conn.execute("UPDATE users SET onboarding_step=1,onboarding_completed_at=NULL WHERE telegram_id=?",(message.from_user.id,))
+        await show_quest_intro(message)
+
+    @dp.message(Command("skip"))
+    async def skip_command(message: Message):
+        with connect() as conn:
+            row=conn.execute("SELECT id FROM users WHERE telegram_id=?",(message.from_user.id,)).fetchone()
+            if row:
+                conn.execute("DELETE FROM subscriptions WHERE user_id=?",(row["id"],))
+                conn.execute("UPDATE users SET role_flags='none',onboarding_step=0 WHERE id=?",(row["id"],))
+        await open_app(message,"Квест пропущен. Роли и подписки не создавались. Ты можешь вернуться к нему командой /quest.")
+
+    @dp.message(Command("tasks"))
+    async def tasks_command(message: Message):
+        await open_app(message,"Открывай ленту заданий TaskHub:")
+
+    @dp.message(Command("mine"))
+    async def mine_command(message: Message):
+        await open_app(message,"Твои задания и отклики находятся в профиле TaskHub:")
+
+    @dp.message(Command("chats"))
+    async def chats_command(message: Message):
+        await open_app(message,"Открой свои диалоги в профиле TaskHub:")
+
+    @dp.message(Command("menu"))
+    async def menu_command(message: Message):
+        await open_app(message,"Меню TaskHub:")
+
+    @dp.callback_query(F.data.startswith("quest:"))
+    async def quest_callback(callback: CallbackQuery):
+        action=callback.data.split(":")
+        telegram_id=callback.from_user.id
+        with connect() as conn:
+            user_row=conn.execute("SELECT id FROM users WHERE telegram_id=?",(telegram_id,)).fetchone()
+            if not user_row:
+                await callback.answer("Сначала отправь /start",show_alert=True)
+                return
+            user_id=user_row["id"]
+            if action[1]=="start":
+                conn.execute("UPDATE users SET onboarding_step=1 WHERE id=?",(user_id,))
+                keyboard=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🧾 Ищу исполнителя",callback_data="quest:role:customer")],
+                    [InlineKeyboardButton(text="💼 Ищу работу",callback_data="quest:role:executor")],
+                    [InlineKeyboardButton(text="🔁 И то, и другое",callback_data="quest:role:both")]
+                ])
+                await callback.message.answer("Шаг 1 из 3 — кем ты будешь чаще?",reply_markup=keyboard)
+            elif action[1]=="skip":
+                conn.execute("DELETE FROM subscriptions WHERE user_id=?",(user_id,))
+                conn.execute("UPDATE users SET role_flags='none',onboarding_step=0 WHERE id=?",(user_id,))
+                await callback.message.answer("Квест пропущен. Роли и подписки не создавались. Вернуться можно через /quest.")
+            elif action[1]=="role" and len(action)==3 and action[2] in ("customer","executor","both"):
+                conn.execute("UPDATE users SET role_flags=?,onboarding_step=2 WHERE id=?",(action[2],user_id))
+                await callback.answer("Роль сохранена")
+                await show_category_step(callback.message)
+            elif action[1]=="category" and len(action)==3 and action[2].isdigit():
+                category_id=int(action[2])
+                category=conn.execute("SELECT id FROM categories WHERE id=? AND parent_id IS NULL AND is_hidden=0",(category_id,)).fetchone()
+                if not category:
+                    await callback.answer("Категория недоступна",show_alert=True)
+                    return
+                exists=conn.execute("SELECT 1 FROM subscriptions WHERE user_id=? AND category_id=?",(user_id,category_id)).fetchone()
+                if exists:
+                    conn.execute("DELETE FROM subscriptions WHERE user_id=? AND category_id=?",(user_id,category_id))
+                else:
+                    count=conn.execute("SELECT COUNT(*) n FROM subscriptions WHERE user_id=?",(user_id,)).fetchone()["n"]
+                    if count>=20:
+                        await callback.answer("Лимит — 20 подписок",show_alert=True)
+                        return
+                    conn.execute("INSERT INTO subscriptions(user_id,category_id) VALUES(?,?)",(user_id,category_id))
+                await callback.answer("Выбор обновлён")
+                await show_category_step(callback.message)
+            elif action[1]=="categories_done":
+                conn.execute("UPDATE users SET onboarding_step=3 WHERE id=?",(user_id,))
+                await callback.answer("Подписки сохранены")
+                await show_first_action(callback.message)
+            elif action[1]=="finish":
+                conn.execute("UPDATE users SET onboarding_step=0,onboarding_completed_at=CURRENT_TIMESTAMP WHERE id=?",(user_id,))
+                conn.execute("INSERT OR IGNORE INTO achievements(user_id,code) VALUES(?,'first_quest')",(user_id,))
+                await callback.answer("Квест пройден!")
+                await callback.message.answer("🏆 Квест пройден! Подписки настроены. Новые задания будут приходить в Telegram дайджестом раз в час, если появятся.")
+                await callback.message.answer("Команды: /tasks — лента, /mine — мои задания, /chats — диалоги, /menu — меню, /quest — пройти квест снова.")
 
     try:
         me = await bot.get_me()
