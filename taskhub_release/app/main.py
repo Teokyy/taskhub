@@ -232,8 +232,6 @@ def room_projects(room_id: int,
             """SELECT p.*,
                       COALESCE((SELECT SUM(s.budget_kop) FROM stages s
                                 WHERE s.project_id=p.id AND s.room_id=p.room_id),0) stages_budget_kop,
-                      COALESCE((SELECT SUM(s.budget_kop) FROM stages s
-                                WHERE s.project_id=p.id AND s.room_id=p.room_id),0) stages_budget_kop,
                       p.budget_reserved_kop direct_reserved_kop,
                       p.budget_spent_kop direct_spent_kop,
                       MAX(0,p.budget_kop-COALESCE((SELECT SUM(s.budget_kop) FROM stages s
