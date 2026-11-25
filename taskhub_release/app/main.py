@@ -60,6 +60,20 @@ async def expire_overdue_tasks():
         await asyncio.sleep(60)
 
 
+
+async def notify_room(room_id: int | None, message: str):
+    """Best-effort notification to the Telegram group linked to a room."""
+    if not room_id or not _bot:
+        return
+    try:
+        with connect() as conn:
+            link = conn.execute("SELECT chat_id FROM telegram_room_links WHERE room_id=?", (room_id,)).fetchone()
+        if link:
+            await _bot.send_message(chat_id=link["chat_id"], text=message)
+    except Exception:
+        log.exception("TELEGRAM_ROOM_NOTIFICATION_FAILED room_id=%s", room_id)
+
+
 async def notify_telegram(telegram_id: int | None, message: str):
     """Send a best-effort Telegram notification without breaking the task action."""
     if not telegram_id or not _bot:
@@ -234,6 +248,52 @@ def ensure_rooms_schema(conn):
 
 def room_error(error: RoomError):
     raise HTTPException(error.status_code, str(error))
+
+
+
+@app.get("/api/rooms/{room_id}/telegram")
+def get_room_telegram(room_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        row = conn.execute("SELECT chat_title,connected_at FROM telegram_room_links WHERE room_id=?", (room_id,)).fetchone()
+        return {"connected": bool(row), "chat_title": row["chat_title"] if row else None, "connected_at": row["connected_at"] if row else None}
+
+
+@app.post("/api/rooms/{room_id}/telegram/code")
+def create_room_telegram_code(room_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        token = secrets.token_urlsafe(24)
+        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
+        conn.execute("""INSERT INTO telegram_room_link_codes(room_id,code_hash,expires_at,created_by)
+                        VALUES(?,?,?,?) ON CONFLICT(room_id) DO UPDATE SET
+                        code_hash=excluded.code_hash,expires_at=excluded.expires_at,created_by=excluded.created_by""",
+                     (room_id, hashlib.sha256(token.encode()).hexdigest(), expires_at, account["id"]))
+        return {"code": token, "expires_at": expires_at}
+
+
+@app.delete("/api/rooms/{room_id}/telegram")
+def disconnect_room_telegram(room_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        conn.execute("DELETE FROM telegram_room_links WHERE room_id=?", (room_id,))
+        conn.execute("DELETE FROM telegram_room_link_codes WHERE room_id=?", (room_id,))
+        return {"ok": True}
 
 
 @app.get("/api/rooms/{room_id}/budget")
