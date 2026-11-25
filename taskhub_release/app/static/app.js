@@ -3,7 +3,7 @@ tg?.ready();tg?.expand();
 const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
-let me=null,tab='room',toastTimer,rooms=[],activeRoom=null,roomBudget=null;
+let me=null,tab='room',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
@@ -47,9 +47,19 @@ function renderRoomSelector(){
  host.innerHTML='<select id="room-select" class="room-select" aria-label="Рабочая комната">'+rooms.map(r=>'<option value="'+r.id+'" '+(r.id===activeRoom.id?'selected':'')+'>'+esc(r.name)+'</option>').join('')+'</select>';
  document.querySelector('#room-select').onchange=async e=>{activeRoom=rooms.find(r=>r.id===Number(e.target.value));persistRoom(activeRoom.id);await refreshMe();setTab('home')};
 }
-async function refreshMe(){me=await api('/me');if(activeRoom){const finance=await api('/rooms/'+activeRoom.id+'/ledger');me.balance_kop=finance.balance_kop;roomBudget=await api('/rooms/'+activeRoom.id+'/budget');const mine=await api('/rooms/'+activeRoom.id+'/tasks?status=mine');me.counts={};mine.forEach(t=>me.counts[t.status]=(me.counts[t.status]||0)+1)}}
+async function refreshMe(){
+ const roomId=activeRoom?.id;
+ if(!roomId){me=await api('/me');return}
+ const [profile,finance,budget,mine]=await Promise.all([
+  api('/me'),api('/rooms/'+roomId+'/ledger'),api('/rooms/'+roomId+'/budget'),api('/rooms/'+roomId+'/tasks?status=mine')
+ ]);
+ if(activeRoom?.id!==roomId)return;
+ me=profile;me.balance_kop=finance.balance_kop;roomBudget=budget;me.counts={};
+ mine.forEach(t=>me.counts[t.status]=(me.counts[t.status]||0)+1);
+}
 function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab))}
 function setTab(next){tab=(next==='home'||next==='mine'||next==='balance')?'profile':next;nav();render()}
+async function toggleWorkMode(){const next=workMode()==='customer'?'executor':'customer';try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode:next})});activeRoom={...activeRoom,work_mode:next};toast(next==='customer'?'Режим изменён: заказчик':'Режим изменён: исполнитель');render()}catch(e){toast(e.message)}}
 function greeting(){const h=new Date().getHours();return h<6?'Доброй ночи':h<12?'Доброе утро':h<18?'Добрый день':'Добрый вечер'}
 async function boot(){
  try{
@@ -89,13 +99,16 @@ function taskCard(t,adminView=false){
 }
 function bindTaskActions(){view.querySelectorAll('[data-claim]').forEach(b=>b.onclick=()=>claim(b.dataset.claim));view.querySelectorAll('[data-submit]').forEach(b=>b.onclick=()=>submitForm(b.dataset.submit))}
 async function render(){
+ const renderToken=++renderSequence;
  nav();
  if(tab==='room'){
   const mode=workMode()==='customer'?'Заказчик':'Исполнитель';
   view.innerHTML='<section class="hello"><div class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</div><h1>'+esc(activeRoom?.name||'Комната')+'</h1><p>Команда, участники и настройки общего пространства.</p></section><section class="panel"><div class="eyebrow">ТВОЯ РОЛЬ В КОМНАТЕ</div><div style="font-size:22px;font-weight:850;margin:7px 0">'+mode+'</div><div class="muted">'+(isAdmin()?'Владелец комнаты':'Участник комнаты')+'</div><div class="divider"></div><div class="task-bottom"><span class="muted">Рабочий режим</span><button class="btn secondary" id="room-switch-mode">Изменить</button></div></section><div class="section-head"><h2>Управление комнатой</h2></div><section class="panel"><b>Участники и доступ</b><p class="muted" style="margin:6px 0 12px">Приглашения, роли и настройки комнаты.</p><button class="btn block" id="room-manage">Открыть управление</button></section><section class="panel"><b>Работа комнаты</b><p class="muted" style="margin:6px 0 12px">Общие задачи и результаты команды доступны на бирже.</p><button class="btn secondary block" id="room-exchange">Перейти на биржу</button></section>';
-  document.querySelector('#room-switch-mode').onclick=showModeSetup;document.querySelector('#room-manage').onclick=()=>isAdmin()?showAdminHub():toast('Управление доступно владельцу и администраторам комнаты');document.querySelector('#room-exchange').onclick=()=>setTab('exchange');
+  document.querySelector('#room-switch-mode').onclick=toggleWorkMode;document.querySelector('#room-manage').onclick=()=>isAdmin()?showAdminHub():toast('Управление доступно владельцу и администраторам комнаты');document.querySelector('#room-exchange').onclick=()=>setTab('exchange');
  }else if(tab==='exchange'){
-  const list=await api('/tasks');
+  view.innerHTML='<section class="hello"><div class="eyebrow">ТЕКУЩАЯ КОМНАТА</div><h1>Биржа</h1><p>Загружаем задачи…</p></section><div class="panel muted">Обновляем список задач</div>';
+  let list;try{list=await api('/tasks')}catch(e){if(renderToken===renderSequence)view.innerHTML=empty('Не удалось загрузить биржу',e.message,'<button class="btn secondary" onclick="render()">Повторить</button>');return}
+  if(renderToken!==renderSequence)return;
   const categories=[...new Set(list.map(t=>t.category||'Другое'))].sort((a,b)=>a.localeCompare(b,'ru'));
   view.innerHTML='<section class="hello"><div class="eyebrow">ТЕКУЩАЯ КОМНАТА</div><h1>Открытые задачи</h1><p>Выбери задачу, которую готов выполнить.</p></section><div class="filter-row"><input class="field" id="task-search" style="margin:0;min-width:140px;flex:1" placeholder="Поиск по задачам"><button class="filter-chip active" data-filter="all">Все</button>'+categories.map(c=>'<button class="filter-chip" data-filter="'+esc(c)+'">'+esc(c)+'</button>').join('')+'</div><div class="filter-row"><select class="field" id="deadline-filter" style="margin:0;min-width:150px;max-width:210px"><option value="all">Любой срок</option><option value="dated">Со сроком</option><option value="none">Без срока</option><option value="overdue">Просроченные</option></select></div><div id="task-list"></div>'+(workMode()==='customer'?'<button class="btn block" id="new-task">Предложить задачу</button>':'');
   let selected='all';
@@ -103,12 +116,14 @@ async function render(){
   view.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{selected=b.dataset.filter;view.querySelectorAll('[data-filter]').forEach(x=>x.classList.toggle('active',x===b));draw()});
   document.querySelector('#task-search').oninput=draw;document.querySelector('#deadline-filter').onchange=draw;document.querySelector('#new-task')?.addEventListener('click',createForm);draw();
  }else if(tab==='profile'){
-  const mine=await api('/tasks?status=mine');
+  view.innerHTML='<section class="hello"><h1>Профиль</h1><p>Загружаем данные комнаты…</p></section><div class="panel muted">Обновляем баланс и задачи</div>';
+  let mine;try{mine=await api('/tasks?status=mine')}catch(e){if(renderToken===renderSequence)view.innerHTML=empty('Не удалось загрузить профиль',e.message,'<button class="btn secondary" onclick="render()">Повторить</button>');return}
+  if(renderToken!==renderSequence)return;
   const counts={in_progress:0,submitted:0,revision:0,accepted:0,rejected:0,not_completed:0};
   mine.forEach(t=>{if(Object.prototype.hasOwnProperty.call(counts,t.status))counts[t.status]++});
   const stats=me.stats||{};
   view.innerHTML='<section class="profile-row" style="margin:8px 2px 18px"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div style="min-width:0;flex:1"><div class="profile-name">'+esc(me.user.first_name||'Участник')+'</div><div class="muted">'+(isAdmin()?'Администратор':'Участник')+' · '+(workMode()==='customer'?'Заказчик':'Исполнитель')+'</div>'+(counts.accepted===0?'<span class="pill" style="margin-top:6px">Первая работа</span>':'')+'<div class="muted" style="font-size:12px;margin-top:3px">'+esc(activeRoom?.name||'')+'</div></div></section><section class="panel balance-card"><div class="task-top"><div><div class="eyebrow">МОЙ БАЛАНС</div><div style="font-size:25px;font-weight:850;margin-top:4px">'+rub(me.balance_kop||0)+'</div></div><button class="btn secondary" id="profile-finance">История</button></div></section><div class="section-head"><h2>Мои задачи</h2><span>'+mine.length+' ВСЕГО</span></div><div class="stats"><div class="stat"><small>В работе</small><strong>'+counts.in_progress+'</strong></div><div class="stat"><small>На проверке</small><strong>'+counts.submitted+'</strong></div><div class="stat"><small>На доработке</small><strong>'+counts.revision+'</strong></div><div class="stat"><small>Принято</small><strong>'+counts.accepted+'</strong></div></div><div class="section-head"><h2>Статистика</h2></div><section class="panel"><div class="ledger-row"><span class="muted">Выполнено и принято</span><b>'+counts.accepted+'</b></div><div class="ledger-row"><span class="muted">Отклонено</span><b>'+counts.rejected+'</b></div><div class="ledger-row"><span class="muted">Не выполнено</span><b>'+counts.not_completed+'</b></div></section><div class="section-head"><h2>Настройки</h2></div><section class="panel"><div class="task-bottom"><div><b>Рабочий режим</b><div class="muted" style="font-size:12px">Для этой комнаты</div></div><button class="btn secondary" id="switch-mode">Изменить</button></div><div class="divider"></div><div class="task-bottom"><div><b>Комната</b><div class="muted" style="font-size:12px">Переключение в шапке приложения</div></div><span class="pill">Активна</span></div></section>'+(isAdmin()?'<section class="panel"><div class="task-top"><div><b>Управление комнатой</b><div class="muted" style="font-size:12px">Настройки и инструменты администратора</div></div><button class="btn secondary" id="open-admin">Открыть</button></div></section>':'');
-  document.querySelector('#profile-finance').onclick=()=>showFinanceScreen();document.querySelector('#switch-mode').onclick=showModeSetup;document.querySelector('#open-admin')?.addEventListener('click',showAdminHub);
+  document.querySelector('#profile-finance').onclick=()=>showFinanceScreen();document.querySelector('#switch-mode').onclick=toggleWorkMode;document.querySelector('#open-admin')?.addEventListener('click',showAdminHub);
  }else if(tab==='admin'){
   showAdminHub();
  }
