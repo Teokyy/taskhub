@@ -73,10 +73,11 @@ function showRoomOnboarding(){
  document.querySelector('#create-room').onclick=async()=>{const name=document.querySelector('#new-room-name').value.trim();if(!name)return toast('Введи название комнаты');try{await api('/rooms',{method:'POST',body:JSON.stringify({name})});await loadRooms();renderRoomSelector();await refreshMe();showModeSetup()}catch(e){toast(e.message)}};
 }
 function showModeSetup(){
+ if(!activeRoom){view.innerHTML='<div class="panel"><h2>Комната не выбрана</h2><p class="muted">Обновляем список комнат. Попробуй ещё раз.</p><button class="btn secondary" id="reload-rooms">Повторить</button></div>';document.querySelector('#reload-rooms').onclick=async()=>{try{await loadRooms();renderRoomSelector();if(activeRoom)showModeSetup();else showRoomOnboarding()}catch(e){toast(e.message)}};return}
  view.innerHTML='<section class="hello"><div class="eyebrow">НАСТРОЙКА КОМНАТЫ</div><h1>'+esc(activeRoom?.name||'Комната')+'</h1><p>Выбери, как ты будешь работать в этой комнате. Режим можно изменить позже, когда не останется активных обязательств.</p></section><div class="panel"><button class="btn block" id="mode-customer">Я заказчик — создаю задачи и принимаю работу</button><button class="btn secondary block" style="margin-top:10px" id="mode-executor">Я исполнитель — беру задачи и выполняю их</button></div>';
  document.querySelector('#mode-customer').onclick=()=>setMode('customer');document.querySelector('#mode-executor').onclick=()=>setMode('executor');
 }
-async function setMode(mode){try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode})});activeRoom.work_mode=mode;await refreshMe();toast('Режим комнаты изменён');setTab('home')}catch(e){toast(e.message)}}
+async function setMode(mode){try{if(!activeRoom?.id){await loadRooms();renderRoomSelector()}if(!activeRoom?.id)throw Error('Не удалось определить комнату. Обнови экран и попробуй снова.');const roomId=activeRoom.id;await api('/rooms/'+roomId+'/mode',{method:'PUT',body:JSON.stringify({mode})});activeRoom={...activeRoom,work_mode:mode};persistRoom(roomId);await refreshMe();toast('Режим комнаты сохранён');setTab('tasks')}catch(e){toast(e.message)}}
 
 function empty(title,desc,action=''){return '<div class="empty"><b>'+esc(title)+'</b>'+esc(desc)+(action||'')+'</div>'}
 function taskCard(t,adminView=false){
