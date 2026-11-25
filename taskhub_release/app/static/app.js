@@ -231,7 +231,9 @@ async function render(){
   document.querySelector('#profile-theme').innerHTML=renderThemeSettings();
   document.querySelector('#profile-theme').querySelectorAll('[data-theme-choice]').forEach(b=>b.onclick=()=>applyTaskhubTheme(b.dataset.themeChoice));
   bindTaskActions();
-}else if(tab==='admin'){
+}else if(tab==='chats'){
+  await showMarketChats();
+ }else if(tab==='admin'){
   showAdminHub();
  }
 }
