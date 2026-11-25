@@ -3,7 +3,7 @@ tg?.ready();tg?.expand();
 const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
-let me=null,tab='tasks',toastTimer,rooms=[],activeRoom=null,roomBudget=null;
+let me=null,tab='room',toastTimer,rooms=[],activeRoom=null,roomBudget=null;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
@@ -90,7 +90,11 @@ function taskCard(t,adminView=false){
 function bindTaskActions(){view.querySelectorAll('[data-claim]').forEach(b=>b.onclick=()=>claim(b.dataset.claim));view.querySelectorAll('[data-submit]').forEach(b=>b.onclick=()=>submitForm(b.dataset.submit))}
 async function render(){
  nav();
- if(tab==='tasks'){
+ if(tab==='room'){
+  const mode=workMode()==='customer'?'Заказчик':'Исполнитель';
+  view.innerHTML='<section class="hello"><div class="eyebrow">РАБОЧЕЕ ПРОСТРАНСТВО</div><h1>'+esc(activeRoom?.name||'Комната')+'</h1><p>Команда, участники и настройки общего пространства.</p></section><section class="panel"><div class="eyebrow">ТВОЯ РОЛЬ В КОМНАТЕ</div><div style="font-size:22px;font-weight:850;margin:7px 0">'+mode+'</div><div class="muted">'+(isAdmin()?'Владелец комнаты':'Участник комнаты')+'</div><div class="divider"></div><div class="task-bottom"><span class="muted">Рабочий режим</span><button class="btn secondary" id="room-switch-mode">Изменить</button></div></section><div class="section-head"><h2>Управление комнатой</h2></div><section class="panel"><b>Участники и доступ</b><p class="muted" style="margin:6px 0 12px">Приглашения, роли и настройки комнаты.</p><button class="btn block" id="room-manage">Открыть управление</button></section><section class="panel"><b>Работа комнаты</b><p class="muted" style="margin:6px 0 12px">Общие задачи и результаты команды доступны на бирже.</p><button class="btn secondary block" id="room-exchange">Перейти на биржу</button></section>';
+  document.querySelector('#room-switch-mode').onclick=showModeSetup;document.querySelector('#room-manage').onclick=()=>isAdmin()?showAdminHub():toast('Управление доступно владельцу и администраторам комнаты');document.querySelector('#room-exchange').onclick=()=>setTab('exchange');
+ }else if(tab==='exchange'){
   const list=await api('/tasks');
   const categories=[...new Set(list.map(t=>t.category||'Другое'))].sort((a,b)=>a.localeCompare(b,'ru'));
   view.innerHTML='<section class="hello"><div class="eyebrow">ТЕКУЩАЯ КОМНАТА</div><h1>Открытые задачи</h1><p>Выбери задачу, которую готов выполнить.</p></section><div class="filter-row"><input class="field" id="task-search" style="margin:0;min-width:140px;flex:1" placeholder="Поиск по задачам"><button class="filter-chip active" data-filter="all">Все</button>'+categories.map(c=>'<button class="filter-chip" data-filter="'+esc(c)+'">'+esc(c)+'</button>').join('')+'</div><div class="filter-row"><select class="field" id="deadline-filter" style="margin:0;min-width:150px;max-width:210px"><option value="all">Любой срок</option><option value="dated">Со сроком</option><option value="none">Без срока</option><option value="overdue">Просроченные</option></select></div><div id="task-list"></div>'+(workMode()==='customer'?'<button class="btn block" id="new-task">Предложить задачу</button>':'');
