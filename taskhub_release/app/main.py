@@ -1204,10 +1204,9 @@ def moderator(account):
 
 def redact_chat_contacts(value: str) -> str:
     import re
-    value=re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "[email скрыт]", value)
-    value=re.sub(r"\\+?\\d[\\d\\s().-]{8,}\\d", "[телефон скрыт]", value)
+    value=re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", "[email скрыт]", value)
+    value=re.sub(r"\+?\d[\d\s().-]{8,}\d", "[телефон скрыт]", value)
     return value
-
 
 def task_base_reward(data: TaskIn) -> int:
     if data.pricing_model == "fixed":
