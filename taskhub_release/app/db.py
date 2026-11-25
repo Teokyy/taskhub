@@ -281,7 +281,6 @@ def init_db():
                 sent_at TEXT,
                 channel TEXT NOT NULL DEFAULT 'telegram'
             );
-            CREATE INDEX IF NOT EXISTS idx_tasks_category_status_created ON tasks(category_id,status,created_at);
             CREATE INDEX IF NOT EXISTS idx_responses_task_status ON responses(task_id,status,created_at);
             CREATE INDEX IF NOT EXISTS idx_messages_chat_created ON messages(chat_id,created_at);
             CREATE INDEX IF NOT EXISTS idx_subscriptions_category ON subscriptions(category_id);
@@ -294,6 +293,7 @@ def init_db():
         _add_column(conn, "tasks", "author_id INTEGER REFERENCES users(id)")
         _add_column(conn, "tasks", "dispute_status TEXT")
         _add_column(conn, "tasks", "completed_at TEXT")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category_status_created ON tasks(category_id,status,created_at)")
 
         # Seed the two-level launch taxonomy idempotently.
         category_tree = {
