@@ -14,7 +14,7 @@ class RoomBudgetTests(unittest.TestCase):
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript("""
             CREATE TABLE rooms(id INTEGER PRIMARY KEY, budget_limit_kop INTEGER,
-                budget_reserved_kop INTEGER NOT NULL DEFAULT 0);
+                budget_reserved_kop INTEGER NOT NULL DEFAULT 0, budget_spent_kop INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE tasks(id INTEGER PRIMARY KEY, room_id INTEGER,
                 budget_reserved_kop INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE budget_events(id INTEGER PRIMARY KEY, room_id INTEGER,
@@ -30,7 +30,7 @@ class RoomBudgetTests(unittest.TestCase):
     def test_reservation_reduces_available_budget(self):
         reserve_task(self.conn, 1, 10, 7000, 5)
         self.assertEqual(get_budget(self.conn, 1),
-                         {"limit_kop": 10000, "reserved_kop": 7000, "available_kop": 3000})
+                         {"limit_kop": 10000, "reserved_kop": 7000, "spent_kop": 0, "available_kop": 3000})
 
     def test_reservation_cannot_exceed_limit(self):
         reserve_task(self.conn, 1, 10, 7000, 5)
