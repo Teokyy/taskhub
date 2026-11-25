@@ -77,6 +77,16 @@ function renderThemeSettings(){
  return '<section class="panel"><div class="task-top"><div><b>Оформление</b><div class="muted" style="font-size:12px;margin-top:3px">Выбери внешний вид TaskHub</div></div><span aria-hidden="true">◐</span></div><div class="theme-options">'+TASKHUB_THEMES.map(t=>'<button type="button" class="theme-option '+(t.id===current?'active':'')+'" data-theme-choice="'+t.id+'" aria-pressed="'+(t.id===current)+'">'+t.label+'</button>').join('')+'</div></section>';
 }
 
+
+function openThemePicker(){
+ const old=document.querySelector('#theme-picker');if(old)old.remove();
+ document.body.insertAdjacentHTML('beforeend','<div class="modal-backdrop" id="theme-picker"><section class="modal-sheet" style="max-width:380px"><div class="modal-head"><div><div class="eyebrow">ВНЕШНИЙ ВИД</div><h2 style="margin:5px 0 0">Тема приложения</h2></div><button class="modal-close" id="theme-picker-close" aria-label="Закрыть">×</button></div>'+renderThemeSettings()+'</section></div>');
+ const modal=document.querySelector('#theme-picker');
+ modal.querySelector('#theme-picker-close').onclick=()=>modal.remove();
+ modal.onclick=e=>{if(e.target===modal)modal.remove()};
+ modal.querySelectorAll('[data-theme-choice]').forEach(b=>b.onclick=()=>{applyTaskhubTheme(b.dataset.themeChoice);modal.remove()});
+}
+
 function nav(){document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.tab===tab))}
 function setTab(next){tab=(next==='home'||next==='mine'||next==='balance')?'profile':next;nav();render()}
 async function toggleWorkMode(){if(!activeRoom?.id)return toast('Сначала выбери рабочую комнату');const next=workMode()==='customer'?'executor':'customer';try{await api('/rooms/'+activeRoom.id+'/mode',{method:'PUT',body:JSON.stringify({mode:next})});activeRoom={...activeRoom,work_mode:next};toast(next==='customer'?'Режим изменён: заказчик':'Режим изменён: исполнитель');render()}catch(e){toast(e.message)}}
@@ -281,4 +291,5 @@ async function showReview(){
 }
 document.querySelector('.nav-inner').addEventListener('click',e=>{const b=e.target.closest('button[data-tab]');if(b)setTab(b.dataset.tab)});
 document.querySelector('#avatar')?.addEventListener('click',()=>setTab('profile'));
+document.querySelector('#theme-toggle')?.addEventListener('click',openThemePicker);
 boot();
