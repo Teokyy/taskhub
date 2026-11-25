@@ -2016,6 +2016,9 @@ def create_market_dispute(task_id: int, data: MarketDisputeIn, x_telegram_init_d
         if not task or int(account["id"]) not in (int(task["created_by"]),int(task["executor_id"])):
             raise HTTPException(404,"Сделка не найдена")
         if task["status"] not in ("in_progress","done"): raise HTTPException(409,"Жалоба недоступна для этого статуса")
+        if task["status"]=="done" and task["completed_at"]:
+            expired=conn.execute("SELECT datetime(?) < datetime('now','-7 days') expired",(task["completed_at"],)).fetchone()["expired"]
+            if expired: raise HTTPException(409,"Срок подачи жалобы после завершения сделки — 7 дней")
         conn.execute("INSERT INTO disputes(task_id,user_id,reason,status) VALUES(?,?,?,'open')",(task_id,account["id"],data.reason.strip()))
         conn.execute("UPDATE tasks SET status='disputed',dispute_status='open',updated_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,))
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"open_dispute","task",task_id,data.reason.strip()))
