@@ -21,6 +21,8 @@ function roomApiPath(path,opts={}){
  if(path==='/review')return prefix+'/review';
  if(path==='/team')return prefix+'/team';
  if(path==='/ledger')return prefix+'/ledger';
+ if(path==='/projects')return prefix+'/projects';
+ if(path.startsWith('/projects/'))return prefix+path;
  return path;
 }
 async function api(path,opts={}){
