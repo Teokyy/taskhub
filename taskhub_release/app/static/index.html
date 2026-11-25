@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#101310">
-  <title>TaskHub — задачи команды</title>
+  <title>TaskHub — пространство для команды</title>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
   <style>
     :root{color-scheme:dark;--bg:#101310;--panel:#191e19;--panel2:#202720;--line:#303a30;--text:#f1f3eb;--muted:#9ba497;--lime:#c7f36b;--lime-ink:#17200c;--red:#ff8278;--radius:20px}
@@ -109,19 +109,43 @@
     .hero .eyebrow{color:#b7d59b}
     .toast{background:#e9f5d5;color:#1b2610}
     @media(min-width:600px){body{padding-left:24px;padding-right:24px}}
-  </style>
+
+    /* TaskHub: вернуть фирменные зелёные акценты и сбалансировать навигацию */
+    :root{--lime:#9be66b;--lime-ink:#14200e}
+    .brand{font-size:22px;letter-spacing:-1px;font-weight:850;color:#f3f5f1}
+    .brand span{color:var(--lime)!important}
+    .brand .brand-dot{font-style:normal;color:var(--lime)}
+    .nav-inner{grid-template-columns:repeat(3,minmax(0,1fr));max-width:620px;gap:7px}
+    .nav button{flex-direction:column;justify-content:center;gap:4px;padding:9px 5px 8px;font-size:11px;border-radius:14px}
+    .nav button .ico{font-size:18px}
+    .nav button.active{background:#263a25;border-color:#476340;color:var(--lime)}
+    .nav button.active:after{display:block;content:"";position:absolute;bottom:3px;left:40%;right:40%;height:2px;border-radius:4px;background:var(--lime)}
+    .btn:not(.secondary):not(.ghost):not(.danger){background:var(--lime);color:var(--lime-ink);box-shadow:0 5px 18px #9be66b26}
+    .btn:not(.secondary):not(.ghost):not(.danger):active{transform:translateY(1px);filter:brightness(.94)}
+    .btn.secondary{background:#202d1f;border:1px solid #496344;color:#d9f5ca}
+    .btn.ghost{color:#b6c9ad}
+    .filter-chip.active{background:#2b4027;color:#d5f6bd;border-color:#5d8050}
+    .pill{background:#293d25;color:#d0f4b5;border-color:#48633d}
+    .positive{color:var(--lime)}
+    .field:focus{border-color:var(--lime);box-shadow:0 0 0 2px #9be66b20}
+    .balance-card{background:var(--lime)!important;color:var(--lime-ink);border-color:#b7f18f!important;box-shadow:0 10px 28px #0002}
+    .balance-card .eyebrow,.balance-card .muted{color:#38512b}
+    .balance-card .btn.secondary{background:#294323;border-color:#294323;color:#efffe6}
+    @media(max-width:370px){.nav-inner{gap:3px}.nav button{font-size:10px;padding-left:2px;padding-right:2px}}
+\n  </style>
 </head>
 <body>
   <div class="shell">
-    <header class="topbar"><div class="brand">TASK<span>HUB.</span></div><div class="topright"><div id="room-switcher" class="room-switcher"></div><button id="avatar" class="avatar" type="button" aria-label="Открыть профиль">T</button></div></header>
+    <header class="topbar"><div class="brand">Task<span>Hub</span><i class="brand-dot">.</i></div><div class="topright"><div id="room-switcher" class="room-switcher"></div><button id="avatar" class="avatar" type="button" aria-label="Открыть профиль">T</button></div></header>
     <main id="view"><div class="empty">Загружаем рабочее пространство…</div></main>
   </div>
   <nav class="nav" aria-label="Основная навигация"><div class="nav-inner">
-    <button data-tab="room" class="active"><span class="ico">⌂</span>Комната</button>
+    <button data-tab="room" class="active"><span class="ico">⌂</span>Комнаты</button>
     <button data-tab="exchange"><span class="ico">▤</span>Биржа</button>
+    <button data-tab="profile"><span class="ico">◉</span>Профиль</button>
   </div></nav>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=10"></script>
+  <script src="/static/app.js?v=11"></script>
   <script src="/static/budget.js?v=1"></script>
   <script>
     document.addEventListener('click', async event => {
