@@ -27,4 +27,6 @@ jobs:
         with:
           node-version: "22"
       - name: Check Mini App JavaScript syntax
-        run: node --check taskhub_release/app/static/app.js
+        run: |
+          node --check taskhub_release/app/static/app.js
+          node --check taskhub_release/app/static/budget.js
