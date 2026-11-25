@@ -170,7 +170,11 @@ def migrate(conn: sqlite3.Connection) -> dict:
         "SELECT 1 FROM schema_migrations WHERE version=?", (SCHEMA_VERSION,)
     ).fetchone()
     if already:
-        return {"status": "already_applied", "version": SCHEMA_VERSION}
+        existing_room = conn.execute("SELECT id FROM rooms ORDER BY id LIMIT 1").fetchone()
+        result = {"status": "already_applied", "version": SCHEMA_VERSION}
+        if existing_room:
+            result["legacy_room_id"] = existing_room[0]
+        return result
 
     users = conn.execute("SELECT id,role FROM users ORDER BY id").fetchall()
     if not users:
