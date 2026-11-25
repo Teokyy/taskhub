@@ -179,6 +179,40 @@
 :root[data-theme="light"] .brand{color:#20271e!important}
 :root[data-theme="light"] .profile-name,:root[data-theme="light"] .section-head h2,:root[data-theme="light"] .task h3{color:#20271e!important}
 
+
+/* Hard override: light theme must never inherit the dark canvas gradient */
+html[data-theme="light"],html[data-theme="light"] body{
+  background-color:#f4f6f2!important;
+  color:#20271e!important;
+}
+html[data-theme="light"] body{
+  background:#f4f6f2!important;
+  background-image:none!important;
+}
+html[data-theme="light"] .shell,
+html[data-theme="light"] #view{
+  background:transparent!important;
+  color:#20271e!important;
+}
+html[data-theme="light"] .brand,
+html[data-theme="light"] .profile-name,
+html[data-theme="light"] .section-head h2,
+html[data-theme="light"] .hello h1,
+html[data-theme="light"] .task h3,
+html[data-theme="light"] .task-bottom,
+html[data-theme="light"] .task-top{
+  color:#20271e!important;
+}
+html[data-theme="light"] .hello p,
+html[data-theme="light"] .muted,
+html[data-theme="light"] .stat small{
+  color:#687365!important;
+}
+html[data-theme="light"] .nav{
+  background:#fafcf8!important;
+  border-top-color:#dce3d7!important;
+}
+
   </style>
 </head>
 <body>
@@ -192,7 +226,7 @@
     <button data-tab="profile"><span class="ico">◉</span>Профиль</button>
   </div></nav>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=22"></script>
+  <script src="/static/app.js?v=23"></script>
   <script src="/static/budget.js?v=2"></script>
   <script>
     document.addEventListener('click', async event => {
