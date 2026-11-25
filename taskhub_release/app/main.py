@@ -1769,6 +1769,7 @@ async def release_accepted_market_response(response_id: int, x_telegram_init_dat
             raise HTTPException(409,"Эту сделку нельзя отменить со стороны исполнителя")
         conn.execute("UPDATE responses SET status='withdrawn',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='accepted'",(response_id,))
         conn.execute("UPDATE tasks SET status='open',assignee_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='in_progress'",(row["task_id"],))
+        conn.execute("UPDATE task_cancel_requests SET status='rejected',resolved_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='pending'",(row["task_id"],))
         conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id=?",(response_id,))
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",(account["id"],"executor_release_deal","task",row["task_id"],"withdraw_without_penalty"))
     await notify_telegram(row["owner_telegram_id"],f"Исполнитель отказался от задания «{row['title']}». Задание снова открыто для откликов.")
@@ -1828,6 +1829,7 @@ async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_t
             task_status="open"
             conn.execute("UPDATE tasks SET status='open',assignee_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",(row["task_id"],))
             conn.execute("UPDATE responses SET status='withdrawn',updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='accepted'",(row["task_id"],))
+            conn.execute("UPDATE task_cancel_requests SET status='rejected',resolved_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='pending'",(row["task_id"],))
             conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id IN (SELECT id FROM responses WHERE task_id=?)",(row["task_id"],))
         conn.execute("UPDATE disputes SET status='resolved',admin_decision=?,admin_comment=?,resolved_at=CURRENT_TIMESTAMP WHERE id=?",
                      (data.decision,data.comment.strip(),dispute_id))
