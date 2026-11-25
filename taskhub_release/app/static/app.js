@@ -49,8 +49,14 @@ async function loadRooms(){
 function renderRoomSelector(){
  const host=document.querySelector('#room-switcher');if(!host)return;
  if(!rooms.length){host.innerHTML='';return}
+ if(!activeRoom||!rooms.some(r=>r.id===activeRoom.id))activeRoom=rooms[0];
  host.innerHTML='<select id="room-select" class="room-select" aria-label="Рабочая комната">'+rooms.map(r=>'<option value="'+r.id+'" '+(r.id===activeRoom.id?'selected':'')+'>'+esc(r.name)+'</option>').join('')+'</select>';
- document.querySelector('#room-select').onchange=async e=>{activeRoom=rooms.find(r=>r.id===Number(e.target.value));persistRoom(activeRoom.id);await refreshMe();setTab('room')};
+ document.querySelector('#room-select').onchange=async e=>{
+  const selectedRoom=rooms.find(r=>r.id===Number(e.target.value));
+  if(!selectedRoom)return toast('Комната не найдена. Обнови список комнат.');
+  activeRoom=selectedRoom;persistRoom(activeRoom.id);
+  try{await refreshMe();setTab('room')}catch(error){toast(error.message)}
+ };
 }
 async function refreshMe(){
  const roomId=activeRoom?.id;
@@ -143,11 +149,12 @@ async function showFinanceScreen(){
   document.querySelector('#finance-back').onclick=()=>setTab('profile');
  }catch(e){toast(e.message)}
 }
-async function loadTelegramStatus(){try{const s=await api('/rooms/'+activeRoom.id+'/telegram');document.querySelector('#telegram-status').textContent=s.connected?'Подключена: '+s.chat_title:'Группа пока не подключена';document.querySelector('#telegram-disconnect').hidden=!s.connected}catch(e){document.querySelector('#telegram-status').textContent='Не удалось проверить подключение: '+e.message}}
+async function loadTelegramStatus(){if(!activeRoom?.id){const status=document.querySelector('#telegram-status');if(status)status.textContent='Сначала выбери рабочую комнату';return}try{const s=await api('/rooms/'+activeRoom.id+'/telegram');document.querySelector('#telegram-status').textContent=s.connected?'Подключена: '+s.chat_title:'Группа пока не подключена';document.querySelector('#telegram-disconnect').hidden=!s.connected}catch(e){document.querySelector('#telegram-status').textContent='Не удалось проверить подключение: '+e.message}}
 async function createTelegramCode(){const b=document.querySelector('#telegram-connect');b.disabled=true;try{const r=await api('/rooms/'+activeRoom.id+'/telegram/code',{method:'POST'});const host=document.querySelector('#telegram-code-result');host.innerHTML='<div class="divider"></div><p class="muted">1. Добавь бота TaskHub в нужную группу. 2. Отправь там команду ниже. Код действует 10 минут.</p><div class="field" style="user-select:all;overflow-wrap:anywhere">/connect '+esc(r.code)+'</div><button class="btn secondary block" id="telegram-copy">Скопировать команду</button>';document.querySelector('#telegram-copy').onclick=async()=>{try{await navigator.clipboard.writeText('/connect '+r.code);toast('Команда скопирована')}catch{prompt('Скопируй команду','/connect '+r.code)}}}catch(e){toast(e.message)}finally{b.disabled=false}}
 async function disconnectTelegram(){if(!confirm('Отключить Telegram-группу от этой комнаты?'))return;try{await api('/rooms/'+activeRoom.id+'/telegram',{method:'DELETE'});toast('Группа отключена');loadTelegramStatus()}catch(e){toast(e.message)}}
 
 async function showAdminHub(){
+ if(!activeRoom?.id)return toast('Сначала выбери рабочую комнату');
  const sections=[['Модерация','Проверка новых задач','open-moderation'],['Проверка работ','Приёмка и доработка','open-review'],['Все задачи','Общий список комнаты','open-all'],['Команда','Участники и роли','open-team'],['Финансы','Бюджет комнаты','open-budget']];
  view.innerHTML='<div class="section-head"><button class="btn ghost" id="admin-back">← Профиль</button><h2>Управление</h2></div>'+sections.map((s,i)=>'<button class="panel admin-link" data-admin="'+s[2]+'" style="display:flex;width:100%;align-items:center;text-align:left;justify-content:space-between;color:var(--text)"><span><b>'+s[0]+'</b><small class="muted" style="display:block;margin-top:4px">'+s[1]+'</small></span><span class="muted">›</span></button>').join('')+'<section class="panel" style="margin-top:12px"><h3>Telegram-группа</h3><p class="muted" id="telegram-status">Проверяем подключение…</p><div class="actions"><button class="btn secondary" id="telegram-connect">Подключить группу</button><button class="btn danger" id="telegram-disconnect" hidden>Отключить</button></div><div id="telegram-code-result"></div></section>';
  loadTelegramStatus();
