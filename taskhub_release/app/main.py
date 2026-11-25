@@ -232,9 +232,13 @@ def room_projects(room_id: int,
             """SELECT p.*,
                       COALESCE((SELECT SUM(s.budget_kop) FROM stages s
                                 WHERE s.project_id=p.id AND s.room_id=p.room_id),0) stages_budget_kop,
-                      COALESCE((SELECT SUM(t.reward_kop) FROM tasks t
-                                WHERE t.project_id=p.id AND t.room_id=p.room_id
-                                  AND t.status='accepted'),0) accrued_kop
+                      COALESCE((SELECT SUM(s.budget_kop) FROM stages s
+                                WHERE s.project_id=p.id AND s.room_id=p.room_id),0) stages_budget_kop,
+                      p.budget_reserved_kop direct_reserved_kop,
+                      p.budget_spent_kop direct_spent_kop,
+                      MAX(0,p.budget_kop-COALESCE((SELECT SUM(s.budget_kop) FROM stages s
+                                WHERE s.project_id=p.id AND s.room_id=p.room_id),0)
+                                -p.budget_reserved_kop-p.budget_spent_kop) direct_available_kop
                FROM projects p WHERE p.room_id=? ORDER BY p.id DESC""",
             (room_id,),
         ).fetchall()
@@ -305,8 +309,9 @@ def create_room_stage(room_id: int, project_id: int, data: StageIn,
             "SELECT COALESCE(SUM(budget_kop),0) n FROM stages WHERE project_id=? AND room_id=?",
             (project_id, room_id),
         ).fetchone()["n"]
-        if allocated + data.budget_rub * 100 > project["budget_kop"]:
-            raise HTTPException(409, "Бюджет этапов превышает бюджет проекта")
+        committed_direct = int(project["budget_reserved_kop"] or 0) + int(project["budget_spent_kop"] or 0)
+        if allocated + committed_direct + data.budget_rub * 100 > project["budget_kop"]:
+            raise HTTPException(409, "Распределение этапов и прямые расходы превышают бюджет проекта")
         cur = conn.execute(
             """INSERT INTO stages(project_id,title,description,budget_kop,room_id)
                VALUES(?,?,?,?,?)""",
@@ -427,19 +432,39 @@ def create_room_task(room_id: int, data: TaskIn,
         room = conn.execute("SELECT * FROM rooms WHERE id=?", (room_id,)).fetchone()
         if not room:
             raise HTTPException(404, "Комната не найдена")
-        if data.project_id or data.stage_id or data.tour_id:
-            raise HTTPException(400, "Привязка к проектам будет подключена следующим этапом")
+        if data.tour_id is not None:
+            raise HTTPException(400, "Привязка задачи к туру пока не поддерживается")
+        project_id = data.project_id
+        stage_id = data.stage_id
+        if stage_id is not None:
+            stage = conn.execute(
+                "SELECT id,project_id FROM stages WHERE id=? AND room_id=?",
+                (stage_id, room_id),
+            ).fetchone()
+            if not stage:
+                raise HTTPException(404, "Этап не найден в этой комнате")
+            if project_id is not None and project_id != stage["project_id"]:
+                raise HTTPException(422, "Этап не принадлежит выбранному проекту")
+            project_id = stage["project_id"]
+        if project_id is not None:
+            project = conn.execute(
+                "SELECT id FROM projects WHERE id=? AND room_id=?",
+                (project_id, room_id),
+            ).fetchone()
+            if not project:
+                raise HTTPException(404, "Проект не найден в этой комнате")
         status = "pending" if room["moderation_enabled"] else "available"
         moderation = "pending" if room["moderation_enabled"] else "approved"
         reserve = 0
         cur = conn.execute(
             """INSERT INTO tasks(title,description,category,reward_kop,status,created_by,
                deadline,pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,
-               budget_reserved_kop,moderation_status,criteria_frozen,room_id)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               budget_reserved_kop,moderation_status,criteria_frozen,room_id,project_id,stage_id)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data.title.strip(), data.description.strip(), data.category.strip(), reward,
              status, account["id"], data.deadline, data.pricing_model, data.norm_minutes,
-             data.difficulty, data.urgency, reward, reserve, moderation, 1, room_id),
+             data.difficulty, data.urgency, reward, reserve, moderation, 1, room_id,
+             project_id, stage_id),
         )
         for pos, item in enumerate(data.criteria):
             conn.execute(
