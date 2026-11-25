@@ -151,6 +151,105 @@ class RoomApiIntegrationTests(unittest.TestCase):
         self.assertEqual([(e["event_type"], e["amount_kop"]) for e in events],
                          [("reserved", 5000), ("spent", 5500)])
 
+
+    def test_invite_join_limit_and_duplicate_membership(self):
+        owner = self.headers("owner-token")
+        worker = self.headers("worker-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        invite = self.client.post(
+            f"/api/rooms/{room_id}/invites", headers=owner,
+            json={"expires_in_days": 7, "max_uses": 1},
+        )
+        self.assertEqual(invite.status_code, 200, invite.text)
+        code = invite.json()["code"]
+        joined = self.client.post("/api/rooms/join", headers=worker, json={"code": code})
+        self.assertEqual(joined.status_code, 200, joined.text)
+        self.assertEqual(joined.json()["room_id"], room_id)
+        self.assertEqual(joined.json()["work_mode"], None)
+        duplicate = self.client.post("/api/rooms/join", headers=worker, json={"code": code})
+        self.assertEqual(duplicate.status_code, 409)
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT uses_count FROM room_invites WHERE id=?", (invite.json()["id"],)
+            ).fetchone()
+        self.assertEqual(row["uses_count"], 1)
+
+    def test_invite_revoke_and_invalid_code(self):
+        owner = self.headers("owner-token")
+        worker = self.headers("worker-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        invite = self.client.post(
+            f"/api/rooms/{room_id}/invites", headers=owner,
+            json={"expires_in_days": 7, "max_uses": 10},
+        ).json()
+        revoked = self.client.delete(
+            f"/api/rooms/{room_id}/invites/{invite['id']}", headers=owner
+        )
+        self.assertEqual(revoked.status_code, 200)
+        denied = self.client.post(
+            "/api/rooms/join", headers=worker, json={"code": invite["code"]}
+        )
+        self.assertEqual(denied.status_code, 404)
+        invalid = self.client.post(
+            "/api/rooms/join", headers=worker, json={"code": "x" * 32}
+        )
+        self.assertEqual(invalid.status_code, 404)
+
+    def test_member_role_permissions_and_removal(self):
+        owner = self.headers("owner-token")
+        worker = self.headers("worker-token")
+        reviewer = self.headers("reviewer-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        joined = self.client.post(
+            f"/api/rooms/{room_id}/invites", headers=owner,
+            json={"expires_in_days": 7, "max_uses": 10},
+        ).json()
+        self.assertEqual(self.client.post(
+            "/api/rooms/join", headers=worker, json={"code": joined["code"]}
+        ).status_code, 409)  # worker is already in the legacy room
+        # Add reviewer through an invitation.
+        self.assertEqual(self.client.post(
+            "/api/rooms/join", headers=reviewer, json={"code": joined["code"]}
+        ).status_code, 200)
+        reviewer_id = self.accounts["reviewer-token"]["id"]
+        promoted = self.client.patch(
+            f"/api/rooms/{room_id}/members/{reviewer_id}", headers=owner,
+            json={"room_role": "admin"},
+        )
+        self.assertEqual(promoted.status_code, 200, promoted.text)
+        demoted = self.client.patch(
+            f"/api/rooms/{room_id}/members/{reviewer_id}", headers=worker,
+            json={"room_role": "member"},
+        )
+        self.assertEqual(demoted.status_code, 403)
+        removed = self.client.delete(
+            f"/api/rooms/{room_id}/members/{reviewer_id}", headers=owner
+        )
+        self.assertEqual(removed.status_code, 200, removed.text)
+        with db.connect() as conn:
+            member = conn.execute(
+                "SELECT left_at FROM room_members WHERE room_id=? AND user_id=?",
+                (room_id, reviewer_id),
+            ).fetchone()
+        self.assertIsNotNone(member["left_at"])
+
+    def test_member_with_active_task_cannot_be_removed(self):
+        owner = self.headers("owner-token")
+        worker = self.headers("worker-token")
+        room_id = self.client.get("/api/rooms", headers=owner).json()[0]["id"]
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO tasks(title,room_id,created_by,assignee_id,status) VALUES(?,?,?,?,?)",
+                ("Active obligation", room_id, self.accounts["owner-token"]["id"],
+                 self.accounts["worker-token"]["id"], "in_progress"),
+            )
+        denied = self.client.delete(
+            f"/api/rooms/{room_id}/members/{self.accounts['worker-token']['id']}",
+            headers=owner,
+        )
+        self.assertEqual(denied.status_code, 409)
+
+
     def test_cross_room_and_legacy_api_are_blocked(self):
         owner = self.headers("owner-token")
         worker = self.headers("worker-token")
