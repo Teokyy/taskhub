@@ -224,6 +224,24 @@ def project_stages(project_id:int,x_telegram_init_data:str=Header(default="",ali
         return [dict(r) for r in conn.execute("SELECT * FROM stages WHERE project_id=? ORDER BY position,id",(project_id,))]
 
 
+@app.get("/api/team")
+def team(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    admin(account)
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT u.id,u.telegram_id,u.username,u.first_name,u.photo_url,u.role,
+              COUNT(CASE WHEN t.status='in_progress' THEN 1 END) active_tasks,
+              COUNT(CASE WHEN t.status='submitted' THEN 1 END) submitted_tasks,
+              COALESCE((SELECT SUM(l.amount_kop) FROM ledger l WHERE l.user_id=u.id),0) earned_kop
+            FROM users u LEFT JOIN tasks t ON t.assignee_id=u.id
+            GROUP BY u.id ORDER BY u.created_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 @app.get("/api/tasks")
 def tasks(status: str = "available", x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
@@ -241,7 +259,7 @@ def tasks(status: str = "available", x_telegram_init_data: str = Header(default=
 
 @app.post("/api/tasks")
 def create_task(data:TaskIn,x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
-    account=user(x_telegram_init_data); admin(account)
+    account=user(x_telegram_init_data)
     if not data.title.strip() or not data.category.strip(): raise HTTPException(422,"Название и категория обязательны")
     reward=task_base_reward(data)
     with connect() as conn:
