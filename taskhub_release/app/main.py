@@ -1225,7 +1225,7 @@ def market_tasks(status: str = "available", x_telegram_init_data: str = Header(d
 
 
 @app.post("/api/market/tasks")
-def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     if not data.title.strip() or not data.category.strip():
         raise HTTPException(422, "Название и категория обязательны")
