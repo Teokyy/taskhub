@@ -9,11 +9,45 @@ from .db import init_db, connect
 from .auth import verify_telegram_init_data
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log=logging.getLogger("taskhub")
 load_dotenv(); ROOT=Path(__file__).resolve().parent
-app=FastAPI(title="TaskHub"); app.mount("/static",StaticFiles(directory=ROOT/"static"),name="static")
-_bot_task=None
+_bot_task = None
+_bot = None
+_bot_status = "starting"
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _bot_task, _bot, _bot_status
+    log.info("TASKHUB_API_STARTING")
+    init_db()
+    try:
+        from .bot import start_bot
+        _bot, _bot_task = await start_bot()
+        _bot_status = "running" if _bot_task else "disabled"
+    except Exception:
+        _bot_status = "error"
+        log.exception("TASKHUB_TELEGRAM_STARTUP_ERROR")
+        # Keep the web app online so diagnostics remain accessible.
+    log.info("TASKHUB_API_STARTED bot_status=%s", _bot_status)
+    try:
+        yield
+    finally:
+        if _bot_task:
+            _bot_task.cancel()
+            try:
+                await _bot_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                log.exception("TELEGRAM_POLLING_SHUTDOWN_ERROR")
+        if _bot:
+            await _bot.session.close()
+        log.info("TASKHUB_SHUTDOWN_COMPLETE")
+
+app=FastAPI(title="TaskHub", lifespan=lifespan)
+app.mount("/static",StaticFiles(directory=ROOT/"static"),name="static")
 class TaskIn(BaseModel): title:str=Field(min_length=2,max_length=120); description:str=""; category:str="Другое"; reward_rub:int=Field(ge=0,le=1000000); deadline:str|None=None
 class SubmitIn(BaseModel): body:str=Field(min_length=1,max_length=10000)
 class ReviewIn(BaseModel): decision:str; comment:str=""
@@ -29,27 +63,10 @@ def current_user(init_data):
 def user(x): return current_user(x)
 def admin(u):
  if u["role"]!="admin": raise HTTPException(403,"Только для администратора")
-@app.on_event("startup")
-async def startup():
- global _bot_task
- init_db()
- log.info("TASKHUB_API_STARTED")
- from .bot import run_bot
- _bot_task = asyncio.create_task(run_bot(), name="telegram-bot-polling")
-
-@app.on_event("shutdown")
-async def shutdown():
- global _bot_task
- if _bot_task:
-  _bot_task.cancel()
-  try:
-   await _bot_task
-  except asyncio.CancelledError:
-   pass
 @app.get("/")
 def home(): return FileResponse(ROOT/"static"/"index.html")
 @app.get("/api/health")
-def health(): return {"ok":True,"service":"TaskHub"}
+def health(): return {"ok":True,"service":"TaskHub","telegram_bot":_bot_status}
 @app.get("/api/me")
 def me(x_telegram_init_data:str=Header(default="",alias="X-Telegram-Init-Data")):
  u=user(x_telegram_init_data)
