@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .auth import verify_telegram_init_data
 from .db import connect, init_db
+from .rooms import RoomError, create_room as create_room_record, list_rooms, set_work_mode as set_room_work_mode
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -98,6 +99,58 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="TaskHub", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+
+
+class RoomIn(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
+class RoomModeIn(BaseModel):
+    mode: str = Field(pattern="^(customer|executor)$")
+
+
+def ensure_rooms_schema(conn):
+    required = {"rooms", "room_members", "room_payout_settings"}
+    found = {row["name"] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+    if not required.issubset(found):
+        raise HTTPException(503, "Комнаты ещё не включены: сначала выполните проверенную миграцию базы")
+
+
+def room_error(error: RoomError):
+    raise HTTPException(error.status_code, str(error))
+
+
+@app.get("/api/rooms")
+def get_rooms(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        return list_rooms(conn, account["id"])
+
+
+@app.post("/api/rooms")
+def post_room(data: RoomIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            return create_room_record(conn, account["id"], data.name)
+        except RoomError as error:
+            room_error(error)
+
+
+@app.put("/api/rooms/{room_id}/mode")
+def put_room_mode(room_id: int, data: RoomModeIn,
+                  x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            return set_room_work_mode(conn, room_id, account["id"], data.mode)
+        except RoomError as error:
+            room_error(error)
 
 
 class CriterionIn(BaseModel):
