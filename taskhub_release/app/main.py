@@ -1202,6 +1202,13 @@ def moderator(account):
         raise HTTPException(403, "Только для модератора")
 
 
+def redact_chat_contacts(value: str) -> str:
+    import re
+    value=re.sub(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}", "[email скрыт]", value)
+    value=re.sub(r"\\+?\\d[\\d\\s().-]{8,}\\d", "[телефон скрыт]", value)
+    return value
+
+
 def task_base_reward(data: TaskIn) -> int:
     if data.pricing_model == "fixed":
         return int(data.reward_rub or 0) * 100
@@ -1877,7 +1884,13 @@ def get_market_messages(chat_id: int, after_id: int = 0, x_telegram_init_data: s
             WHERE m.chat_id=? AND m.id>? AND (m.hidden_for_user_id IS NULL OR m.hidden_for_user_id<>?) AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id=m.id AND h.user_id=?)
             ORDER BY m.id LIMIT 100""",(chat_id,after_id,account["id"],account["id"])).fetchall()
         conn.execute("""UPDATE messages SET read_at=CURRENT_TIMESTAMP WHERE chat_id=? AND sender_id<>? AND read_at IS NULL""",(chat_id,account["id"]))
-    return [dict(x) for x in rows]
+    result=[]
+    for row in rows:
+        item=dict(row)
+        if int(item["sender_id"])!=int(account["id"]):
+            item["text"]=redact_chat_contacts(item["text"])
+        result.append(item)
+    return result
 
 
 @app.post("/api/market/chats/{chat_id}/messages")
