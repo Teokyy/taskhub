@@ -318,6 +318,11 @@ class MarketReviewIn(BaseModel):
     text: str = Field(default="", max_length=500)
 
 
+class DisputeResolutionIn(BaseModel):
+    decision: str = Field(pattern="^(done|cancelled|reopen)$")
+    comment: str = Field(default="", max_length=2000)
+
+
 class MarketDisputeIn(BaseModel):
     reason: str = Field(min_length=5, max_length=2000)
 
@@ -1780,6 +1785,40 @@ def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-T
             LEFT JOIN users executor ON executor.id=r.executor_id
             WHERE d.status='open' ORDER BY d.created_at""").fetchall()
     return [dict(x) for x in rows]
+
+
+@app.post("/api/moderation/disputes/{dispute_id}/resolve")
+async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data);admin(account)
+    with connect() as conn:
+        row=conn.execute("""SELECT d.*,t.title,t.status task_status,t.created_by,
+            owner.telegram_id owner_telegram_id,r.executor_id,executor.telegram_id executor_telegram_id
+            FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users owner ON owner.id=t.created_by
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN users executor ON executor.id=r.executor_id
+            WHERE d.id=? AND d.status='open'""",(dispute_id,)).fetchone()
+        if not row: raise HTTPException(404,"Открытая жалоба не найдена")
+        if data.decision=="done":
+            task_status="done"
+            conn.execute("UPDATE tasks SET status='done',completed_at=COALESCE(completed_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=?",(row["task_id"],))
+            conn.execute("UPDATE chats SET closed_at=COALESCE(closed_at,CURRENT_TIMESTAMP) WHERE response_id IN (SELECT id FROM responses WHERE task_id=?)",(row["task_id"],))
+        elif data.decision=="cancelled":
+            task_status="cancelled"
+            conn.execute("UPDATE tasks SET status='cancelled',assignee_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",(row["task_id"],))
+            conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id IN (SELECT id FROM responses WHERE task_id=?)",(row["task_id"],))
+        else:
+            task_status="open"
+            conn.execute("UPDATE tasks SET status='open',assignee_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?",(row["task_id"],))
+            conn.execute("UPDATE responses SET status='withdrawn',updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='accepted'",(row["task_id"],))
+            conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id IN (SELECT id FROM responses WHERE task_id=?)",(row["task_id"],))
+        conn.execute("UPDATE disputes SET status='resolved',admin_decision=?,admin_comment=?,resolved_at=CURRENT_TIMESTAMP WHERE id=?",
+                     (data.decision,data.comment.strip(),dispute_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"],"resolve_dispute","dispute",dispute_id,f"{data.decision};{data.comment.strip()}"))
+    notice=f"Модератор рассмотрел жалобу по сделке «{row['title']}». Решение: {data.decision}. {data.comment}".strip()
+    await notify_telegram(row["owner_telegram_id"],notice)
+    if row["executor_telegram_id"]: await notify_telegram(row["executor_telegram_id"],notice)
+    return {"ok":True,"status":task_status}
 
 
 @app.get("/api/moderation/disputes/{dispute_id}/chat")
