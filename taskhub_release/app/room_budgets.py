@@ -73,6 +73,19 @@ def _task_scope(conn: sqlite3.Connection, room_id: int, task_id: int):
     return task, project, stage if stage_id is not None else None
 
 
+def _check_project_spend(conn, project, stage, reserved: int, spent: int) -> None:
+    if stage is not None:
+        if int(stage["budget_reserved_kop"] or 0) - reserved + int(stage["budget_spent_kop"] or 0) + spent > int(stage["budget_kop"]):
+            raise RoomError("Фактическая выплата превышает остаток бюджета этапа", 409)
+    elif project is not None:
+        allocated = conn.execute(
+            "SELECT COALESCE(SUM(budget_kop),0) n FROM stages WHERE project_id=? AND room_id=?",
+            (project["id"], project["room_id"]),
+        ).fetchone()["n"]
+        if allocated + int(project["budget_reserved_kop"] or 0) - reserved + int(project["budget_spent_kop"] or 0) + spent > int(project["budget_kop"]):
+            raise RoomError("Фактическая выплата превышает остаток прямого бюджета проекта", 409)
+
+
 def _reserve_project_scope(conn, project, stage, amount_kop: int) -> None:
     if stage is not None:
         cur = conn.execute(
@@ -136,21 +149,42 @@ def reserve_task(conn: sqlite3.Connection, room_id: int, task_id: int,
 
 
 def release_task(conn: sqlite3.Connection, room_id: int, task_id: int,
-                 actor_id: int | None, event_type: str = "released") -> int:
+                 actor_id: int | None, event_type: str = "released",
+                 spent_amount_kop: int | None = None) -> int:
     if event_type not in ("released", "spent"):
         raise RoomError("Недопустимое событие бюджета", 422)
     task, project, stage = _task_scope(conn, room_id, task_id)
     amount = int(task["budget_reserved_kop"] or 0)
     if amount <= 0:
         return 0
+    actual_spent = amount if event_type == "spent" and spent_amount_kop is None else (int(spent_amount_kop or 0) if event_type == "spent" else 0)
+    if actual_spent < 0:
+        raise RoomError("Фактическая выплата не может быть отрицательной", 422)
+    room = conn.execute(
+        "SELECT budget_limit_kop,budget_reserved_kop,budget_spent_kop FROM rooms WHERE id=?",
+        (room_id,),
+    ).fetchone()
+    if event_type == "spent":
+        if room["budget_limit_kop"] is not None and int(room["budget_reserved_kop"] or 0) - amount + int(room["budget_spent_kop"] or 0) + actual_spent > int(room["budget_limit_kop"]):
+            raise RoomError("Фактическая выплата превышает остаток бюджета комнаты", 409)
+        _check_project_spend(conn, project, stage, amount, actual_spent)
     cur = conn.execute("""UPDATE tasks SET budget_reserved_kop=0
         WHERE id=? AND room_id=? AND budget_reserved_kop=?""", (task_id, room_id, amount))
     if cur.rowcount != 1:
         raise RoomError("Резерв задачи уже изменён, обнови страницу", 409)
     conn.execute("""UPDATE rooms SET budget_reserved_kop=MAX(0,budget_reserved_kop-?),
         budget_spent_kop=budget_spent_kop+? WHERE id=?""",
-        (amount, amount if event_type == "spent" else 0, room_id))
+        (amount, actual_spent, room_id))
     _release_project_scope(conn, project, stage, amount, event_type == "spent")
-    conn.execute("""INSERT INTO budget_events(room_id,task_id,actor_id,event_type,amount_kop)
-                    VALUES(?,?,?,?,?)""", (room_id, task_id, actor_id, event_type, amount))
+    if event_type == "spent" and actual_spent != amount:
+        if stage is not None:
+            conn.execute("UPDATE stages SET budget_spent_kop=budget_spent_kop+? WHERE id=?",
+                         (actual_spent - amount, stage["id"]))
+        elif project is not None:
+            conn.execute("UPDATE projects SET budget_spent_kop=budget_spent_kop+? WHERE id=?",
+                         (actual_spent - amount, project["id"]))
+    conn.execute("""INSERT INTO budget_events(room_id,task_id,actor_id,event_type,amount_kop,details)
+                    VALUES(?,?,?,?,?,?)""",
+                 (room_id, task_id, actor_id, event_type, actual_spent if event_type == "spent" else amount,
+                  f"reserved={amount};actual_spent={actual_spent}" if event_type == "spent" else ""))
     return amount
