@@ -15,13 +15,24 @@ class RoomBudgetTests(unittest.TestCase):
         self.conn.executescript("""
             CREATE TABLE rooms(id INTEGER PRIMARY KEY, budget_limit_kop INTEGER,
                 budget_reserved_kop INTEGER NOT NULL DEFAULT 0, budget_spent_kop INTEGER NOT NULL DEFAULT 0);
-            CREATE TABLE tasks(id INTEGER PRIMARY KEY, room_id INTEGER,
+            CREATE TABLE projects(id INTEGER PRIMARY KEY, room_id INTEGER,
+                budget_kop INTEGER NOT NULL, budget_reserved_kop INTEGER NOT NULL DEFAULT 0,
+                budget_spent_kop INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE stages(id INTEGER PRIMARY KEY, room_id INTEGER, project_id INTEGER,
+                budget_kop INTEGER NOT NULL, budget_reserved_kop INTEGER NOT NULL DEFAULT 0,
+                budget_spent_kop INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE tasks(id INTEGER PRIMARY KEY, room_id INTEGER, project_id INTEGER,
+                stage_id INTEGER, status TEXT DEFAULT 'available',
                 budget_reserved_kop INTEGER NOT NULL DEFAULT 0);
             CREATE TABLE budget_events(id INTEGER PRIMARY KEY, room_id INTEGER,
                 task_id INTEGER, actor_id INTEGER, event_type TEXT, amount_kop INTEGER,
                 details TEXT DEFAULT '', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
             INSERT INTO rooms(id,budget_limit_kop) VALUES(1,10000),(2,5000);
+            INSERT INTO projects(id,room_id,budget_kop) VALUES(20,1,10000);
+            INSERT INTO stages(id,room_id,project_id,budget_kop) VALUES(30,1,20,5000);
             INSERT INTO tasks(id,room_id) VALUES(10,1),(11,1),(12,2);
+            INSERT INTO tasks(id,room_id,project_id) VALUES(13,1,20);
+            INSERT INTO tasks(id,room_id,project_id,stage_id) VALUES(14,1,20,30);
         """)
 
     def tearDown(self):
@@ -65,6 +76,31 @@ class RoomBudgetTests(unittest.TestCase):
         release_task(self.conn, 1, 10, 5, "spent")
         with self.assertRaises(RoomError):
             set_budget_limit(self.conn, 1, 5, 6000)
+
+    def test_direct_project_tasks_respect_unallocated_project_budget(self):
+        reserve_task(self.conn, 1, 13, 4000, 5)
+        project = self.conn.execute("SELECT * FROM projects WHERE id=20").fetchone()
+        self.assertEqual(project["budget_reserved_kop"], 4000)
+        with self.assertRaises(RoomError):
+            reserve_task(self.conn, 1, 13, 1000, 5)
+
+    def test_stage_tasks_consume_stage_budget_and_spend(self):
+        reserve_task(self.conn, 1, 14, 4000, 5)
+        stage = self.conn.execute("SELECT * FROM stages WHERE id=30").fetchone()
+        self.assertEqual(stage["budget_reserved_kop"], 4000)
+        with self.assertRaises(RoomError):
+            reserve_task(self.conn, 1, 14, 2000, 5)
+        release_task(self.conn, 1, 14, 5, "spent")
+        stage = self.conn.execute("SELECT * FROM stages WHERE id=30").fetchone()
+        self.assertEqual(stage["budget_reserved_kop"], 0)
+        self.assertEqual(stage["budget_spent_kop"], 4000)
+
+    def test_stage_must_belong_to_project_in_same_room(self):
+        self.conn.execute("INSERT INTO projects(id,room_id,budget_kop) VALUES(21,2,5000)")
+        self.conn.execute("INSERT INTO stages(id,room_id,project_id,budget_kop) VALUES(31,2,21,3000)")
+        self.conn.execute("UPDATE tasks SET project_id=20,stage_id=31 WHERE id=14")
+        with self.assertRaises(RoomError):
+            reserve_task(self.conn, 1, 14, 1000, 5)
 
     def test_budget_history_is_append_only(self):
         self.conn.execute("INSERT INTO budget_events(room_id,event_type,amount_kop) VALUES(1,'reserved',100)")
