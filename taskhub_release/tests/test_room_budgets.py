@@ -51,6 +51,21 @@ class RoomBudgetTests(unittest.TestCase):
             set_budget_limit(self.conn, 1, 5, 6000)
         self.assertEqual(get_budget(self.conn, 1)["limit_kop"], 10000)
 
+    def test_accepted_task_moves_reserve_to_spent(self):
+        reserve_task(self.conn, 1, 10, 7000, 5)
+        self.assertEqual(release_task(self.conn, 1, 10, 5, "spent"), 7000)
+        self.assertEqual(get_budget(self.conn, 1),
+                         {"limit_kop": 10000, "reserved_kop": 0,
+                          "spent_kop": 7000, "available_kop": 3000})
+        with self.assertRaises(RoomError):
+            reserve_task(self.conn, 1, 11, 4000, 5)
+
+    def test_cannot_lower_limit_below_spent(self):
+        reserve_task(self.conn, 1, 10, 7000, 5)
+        release_task(self.conn, 1, 10, 5, "spent")
+        with self.assertRaises(RoomError):
+            set_budget_limit(self.conn, 1, 5, 6000)
+
     def test_budget_is_isolated_between_rooms(self):
         reserve_task(self.conn, 2, 12, 5000, 5)
         self.assertEqual(get_budget(self.conn, 1)["reserved_kop"], 0)
