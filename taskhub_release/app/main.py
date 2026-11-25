@@ -1176,7 +1176,8 @@ def current_user(init_data: str):
         raise HTTPException(401, "Откройте TaskHub через Telegram")
     telegram_id = int(telegram_user["id"])
     admin_ids = {int(value.strip()) for value in getenv("ADMIN_TELEGRAM_IDS", "").split(",") if value.strip().isdigit()}
-    role = "admin" if telegram_id in admin_ids or (dev_mode and telegram_id == 999000) else "helper"
+    moderator_ids = {int(value.strip()) for value in getenv("MODERATOR_TELEGRAM_IDS", "").split(",") if value.strip().isdigit()}
+    role = "admin" if telegram_id in admin_ids or (dev_mode and telegram_id == 999000) else ("moderator" if telegram_id in moderator_ids else "helper")
     with connect() as conn:
         conn.execute(
             """INSERT INTO users(telegram_id, username, first_name, role, photo_url) VALUES(?,?,?,?,?)
