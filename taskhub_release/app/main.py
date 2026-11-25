@@ -560,7 +560,7 @@ def room_ledger(room_id: int,
 
 
 @app.post("/api/rooms/{room_id}/tasks")
-def create_room_task(room_id: int, data: TaskIn,
+async def create_room_task(room_id: int, data: TaskIn,
                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     reward = task_base_reward(data)
@@ -622,11 +622,13 @@ def create_room_task(room_id: int, data: TaskIn,
                VALUES(?,?, 'created',NULL,?,?)""",
             (cur.lastrowid, account["id"], status, f"room_id={room_id}"),
         )
-        return dict(conn.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone())
+        created = dict(conn.execute("SELECT * FROM tasks WHERE id=?", (cur.lastrowid,)).fetchone())
+    await notify_room(room_id, f"🆕 Новая задача: «{created['title']}»" + (" (ожидает модерации)" if status == "pending" else ""))
+    return created
 
 
 @app.post("/api/rooms/{room_id}/tasks/{task_id}/claim")
-def claim_room_task(room_id: int, task_id: int,
+async def claim_room_task(room_id: int, task_id: int,
                     x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     with connect() as conn:
@@ -655,11 +657,13 @@ def claim_room_task(room_id: int, task_id: int,
                VALUES(?,?,'claimed','available','in_progress')""",
             (task_id, account["id"]),
         )
-        return {"ok": True, "status": "in_progress"}
+        title = task["title"]
+    await notify_room(room_id, f"👀 Задачу «{title}» взяли в работу. Исполнитель: {account.get('first_name') or 'Участник'}")
+    return {"ok": True, "status": "in_progress"}
 
 
 @app.post("/api/rooms/{room_id}/tasks/{task_id}/submit")
-def submit_room_task(room_id: int, task_id: int, data: SubmitIn,
+async def submit_room_task(room_id: int, task_id: int, data: SubmitIn,
                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     with connect() as conn:
@@ -688,11 +692,16 @@ def submit_room_task(room_id: int, task_id: int, data: SubmitIn,
                VALUES(?,?,'submitted',?,'submitted',?)""",
             (task_id, account["id"], task["status"], f"submission_id={cur.lastrowid}"),
         )
-        return {"ok": True, "status": "submitted"}
+        title = task["title"]
+        creator = conn.execute("SELECT telegram_id FROM users WHERE id=?", (task["created_by"],)).fetchone()
+    await notify_room(room_id, f"📨 Работа по задаче «{title}» отправлена на проверку.")
+    if creator:
+        await notify_telegram(creator["telegram_id"], f"📨 Работа по твоей задаче «{title}» отправлена на проверку.")
+    return {"ok": True, "status": "submitted"}
 
 
 @app.post("/api/rooms/{room_id}/tasks/{task_id}/moderate")
-def moderate_room_task(room_id: int, task_id: int, data: ModerationIn,
+async def moderate_room_task(room_id: int, task_id: int, data: ModerationIn,
                        x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     if data.decision == "reject" and not data.comment.strip():
@@ -740,11 +749,13 @@ def moderate_room_task(room_id: int, task_id: int, data: ModerationIn,
             (task_id, account["id"], "moderation_" + data.decision,
              "pending", new_status, data.comment.strip()),
         )
-        return {"ok": True, "status": new_status}
+        title = task["title"]
+    await notify_room(room_id, ("✅ Задача одобрена и опубликована" if data.decision == "approve" else "❌ Задача отклонена") + f"\n«{title}»" + (f"\nПричина: {data.comment.strip()}" if data.comment.strip() else ""))
+    return {"ok": True, "status": new_status}
 
 
 @app.post("/api/rooms/{room_id}/tasks/{task_id}/review")
-def review_room_task(room_id: int, task_id: int, data: ReviewIn,
+async def review_room_task(room_id: int, task_id: int, data: ReviewIn,
                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     if data.decision not in ("accept", "revision", "reject"):
@@ -801,7 +812,13 @@ def review_room_task(room_id: int, task_id: int, data: ReviewIn,
             (task_id, account["id"], data.decision, "submitted", new_status,
              f"quality={data.quality};{data.comment.strip()}"),
         )
-        return {"ok": True, "status": new_status}
+        title = task["title"]
+        assignee = conn.execute("SELECT telegram_id FROM users WHERE id=?", (task["assignee_id"],)).fetchone()
+    message = {"accepted": "✅ Работа принята", "revision": "🛠 Работа отправлена на доработку", "rejected": "❌ Работа отклонена"}[new_status] + f"\n«{title}»" + (f"\nКомментарий: {data.comment.strip()}" if data.comment.strip() else "")
+    await notify_room(room_id, message)
+    if assignee:
+        await notify_telegram(assignee["telegram_id"], message)
+    return {"ok": True, "status": new_status}
 
 
 @app.get("/api/rooms")
