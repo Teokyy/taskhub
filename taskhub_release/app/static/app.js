@@ -29,7 +29,7 @@ function roomApiPath(path,opts={}){
 async function api(path,opts={}){
  let target=path;
  if(path!=='/me'&&path!=='/rooms'&&!path.startsWith('/rooms')){
-  const roomScoped=/^\/(tasks|ledger|budget|projects|team|moderation|review)(\/|\?|$)/.test(path);
+  const roomScoped=/^\/(tasks|ledger|budget|projects|team|moderation|review)(\/|\?|$)/.test(path)&&!path.startsWith('/moderation/disputes');
   if(roomScoped&&!activeRoom?.id)throw Error('Сначала выбери рабочую комнату. Загружаем её данные…');
   target=roomApiPath(path,opts);
  }
