@@ -635,8 +635,8 @@ def review_room_task(room_id: int, task_id: int, data: ReviewIn,
         if cur.rowcount != 1:
             raise HTTPException(409, "Работа уже рассмотрена")
         if data.decision == "accept":
-            release_task(conn, room_id, task_id, account["id"], "spent")
             amount = int(round(task["reward_kop"] * QUALITY_FACTORS[data.quality]))
+            release_task(conn, room_id, task_id, account["id"], "spent", amount)
             conn.execute(
                 """INSERT INTO ledger(user_id,task_id,room_id,amount_kop,kind,note)
                    VALUES(?,?,?,?,?,?)""",
