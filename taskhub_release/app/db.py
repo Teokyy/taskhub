@@ -320,6 +320,14 @@ def init_db():
 
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS task_cancel_requests(
+                task_id INTEGER PRIMARY KEY REFERENCES tasks(id),
+                requested_by INTEGER NOT NULL REFERENCES users(id),
+                accepted_by INTEGER REFERENCES users(id),
+                status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','rejected')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                resolved_at TEXT
+            );
             CREATE TABLE IF NOT EXISTS user_presence(
                 user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
                 last_seen TEXT NOT NULL
