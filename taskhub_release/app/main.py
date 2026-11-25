@@ -363,6 +363,8 @@ def create_room_stage(room_id: int, project_id: int, data: StageIn,
             require_room_admin(conn, room_id, account["id"])
         except RoomError as error:
             room_error(error)
+        # Serialize allocation check + stage insert against concurrent budget changes.
+        conn.execute("BEGIN IMMEDIATE")
         project = conn.execute(
             "SELECT * FROM projects WHERE id=? AND room_id=?", (project_id, room_id)
         ).fetchone()
