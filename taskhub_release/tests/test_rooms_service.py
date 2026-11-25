@@ -96,6 +96,20 @@ class RoomServiceTests(unittest.TestCase):
         result = set_work_mode(self.conn, self.room, 2, "customer")
         self.assertTrue(result["changed"])
 
+    def test_initial_mode_selection_cannot_bypass_existing_executor_obligation(self):
+        self.conn.execute(
+            "INSERT INTO tasks VALUES(1,?,?,1,'in_progress')", (self.room, 2)
+        )
+        with self.assertRaises(RoomError):
+            set_work_mode(self.conn, self.room, 2, "customer")
+
+    def test_initial_mode_selection_cannot_bypass_submitted_customer_task(self):
+        self.conn.execute(
+            "INSERT INTO tasks VALUES(1,?,?,2,'submitted')", (self.room, 1)
+        )
+        with self.assertRaises(RoomError):
+            set_work_mode(self.conn, self.room, 1, "executor")
+
     def test_mode_guard(self):
         with self.assertRaises(RoomError):
             require_mode(self.conn, self.room, 2, "customer")
