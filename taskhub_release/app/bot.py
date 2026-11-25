@@ -109,7 +109,7 @@ async def start_bot():
             mark="✅ " if category["id"] in selected else ""
             buttons.append([InlineKeyboardButton(text=mark+category["name"],callback_data=f"quest:category:{category['id']}")])
         buttons.append([InlineKeyboardButton(text="Готово →",callback_data="quest:categories_done")])
-        await target.answer("Шаг 2 из 3 — выбери направления, о которых сообщать. Можно несколько.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await target.answer("Прогресс: ▰▰▱\nШаг 2 из 3 — выбери направления, о которых сообщать. Можно несколько.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
     async def show_first_action(target):
         with connect() as conn:
@@ -121,7 +121,7 @@ async def start_bot():
         if role_flags in ("executor","both"):
             buttons.append([InlineKeyboardButton(text="🔎 Открыть ленту",web_app=WebAppInfo(url=url+"?tab=exchange"))])
         buttons.append([InlineKeyboardButton(text="Завершить квест",callback_data="quest:finish")])
-        await target.answer("Шаг 3 из 3 — сделай первое действие. Можно открыть приложение и вернуться сюда позже.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await target.answer("Прогресс: ▰▰▰\nШаг 3 из 3 — сделай первое действие. Можно открыть приложение и вернуться сюда позже.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
     @dp.message(CommandStart())
     async def start(message: Message):
@@ -140,7 +140,7 @@ async def start_bot():
                 [InlineKeyboardButton(text="💼 Ищу работу",callback_data="quest:role:executor")],
                 [InlineKeyboardButton(text="🔁 И то, и другое",callback_data="quest:role:both")]
             ])
-            await message.answer("Шаг 1 из 3 — кем ты будешь чаще?",reply_markup=keyboard)
+            await message.answer("Прогресс: ▰▱▱\nШаг 1 из 3 — кем ты будешь чаще?",reply_markup=keyboard)
         elif row["onboarding_step"]==2:
             await show_category_step(message)
         elif row["onboarding_step"]==3:
