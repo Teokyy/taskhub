@@ -1490,17 +1490,22 @@ def market_ledger(x_telegram_init_data: str = Header(default="", alias="X-Telegr
 
 
 @app.get("/api/market/tasks")
-def market_tasks(status: str = "available", x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+def market_tasks(status: str = "available", limit: int = 50, offset: int = 0, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
+    limit=max(1,min(limit,100));offset=max(0,offset)
     with connect() as conn:
         if status == "mine":
             rows = conn.execute(
-                "SELECT * FROM tasks WHERE room_id IS NULL AND (created_by=? OR assignee_id=?) ORDER BY id DESC",
-                (account["id"], account["id"]),
+                """SELECT tasks.*,(SELECT requested_by FROM task_cancel_requests cr WHERE cr.task_id=tasks.id AND cr.status='pending') cancel_requested_by
+                FROM tasks WHERE room_id IS NULL AND (created_by=? OR assignee_id=?) ORDER BY id DESC LIMIT ? OFFSET ?""",
+                (account["id"],account["id"],limit,offset),
             ).fetchall()
         elif status == "available":
             rows = conn.execute(
-                "SELECT t.*,(SELECT requested_by FROM task_cancel_requests cr WHERE cr.task_id=t.id AND cr.status='pending') cancel_requested_by,u.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.created_by WHERE t.room_id IS NULL AND t.status IN ('open','available') AND t.moderation_status='approved' ORDER BY t.id DESC"
+                """SELECT t.*,(SELECT requested_by FROM task_cancel_requests cr WHERE cr.task_id=t.id AND cr.status='pending') cancel_requested_by,
+                u.first_name creator_name FROM tasks t LEFT JOIN users u ON u.id=t.created_by
+                WHERE t.room_id IS NULL AND t.status IN ('open','available') AND t.moderation_status='approved'
+                ORDER BY t.id DESC LIMIT ? OFFSET ?""",(limit,offset)
             ).fetchall()
         else:
             raise HTTPException(400, "Неизвестный фильтр биржи")
