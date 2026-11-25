@@ -57,6 +57,11 @@ class RoomMigrationTests(unittest.TestCase):
             self.assertEqual(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE room_id=?", (room_id,)).fetchone()[0], 1)
         self.assertEqual(conn.execute("SELECT room_role FROM room_members WHERE user_id=1").fetchone()[0], "owner")
         self.assertIsNone(conn.execute("SELECT work_mode FROM room_members WHERE user_id=2").fetchone()[0])
+        self.assertEqual(migration.SCHEMA_VERSION, 5)
+        project = conn.execute("SELECT budget_reserved_kop,budget_spent_kop FROM projects WHERE id=10").fetchone()
+        stage = conn.execute("SELECT budget_reserved_kop,budget_spent_kop FROM stages WHERE id=11").fetchone()
+        self.assertEqual(tuple(project), (0, 0))
+        self.assertEqual(tuple(stage), (0, 0))
 
     def test_migration_is_idempotent(self):
         conn = self.make_legacy_db()
