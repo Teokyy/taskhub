@@ -317,6 +317,7 @@ def init_db():
             for child_name in children:
                 conn.execute("INSERT OR IGNORE INTO categories(name,parent_id) VALUES(?,?)", (child_name,parent_id))
         conn.execute("UPDATE tasks SET author_id=created_by WHERE author_id IS NULL AND created_by IS NOT NULL")
+        conn.execute("UPDATE tasks SET status='open' WHERE room_id IS NULL AND status='available' AND assignee_id IS NULL")
 
         conn.executescript(
             """
