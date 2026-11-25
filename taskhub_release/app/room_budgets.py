@@ -90,16 +90,13 @@ def _reserve_project_scope(conn, project, stage, amount_kop: int) -> None:
         if cur.rowcount != 1:
             raise RoomError("Недостаточно свободного бюджета этапа", 409)
     elif project is not None:
-        allocated = conn.execute(
-            """SELECT COALESCE(SUM(budget_kop),0) n FROM stages
-               WHERE project_id=? AND room_id=?""",
-            (project["id"], project["room_id"]),
-        ).fetchone()["n"]
         cur = conn.execute(
             """UPDATE projects SET budget_reserved_kop=budget_reserved_kop+?
-               WHERE id=? AND room_id=? AND
-               ?+budget_reserved_kop+budget_spent_kop+?<=budget_kop""",
-            (amount_kop, project["id"], project["room_id"], allocated, amount_kop),
+               WHERE id=? AND room_id=?
+                 AND COALESCE((SELECT SUM(s.budget_kop) FROM stages s
+                               WHERE s.project_id=projects.id AND s.room_id=projects.room_id),0)
+                     +budget_reserved_kop+budget_spent_kop+?<=budget_kop""",
+            (amount_kop, project["id"], project["room_id"], amount_kop),
         )
         if cur.rowcount != 1:
             raise RoomError("Недостаточно свободного прямого бюджета проекта", 409)
