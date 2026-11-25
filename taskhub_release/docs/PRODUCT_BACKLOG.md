@@ -1,3 +1,22 @@
+# TaskHub Marketplace MVP — current priority (2026-11-26)
+
+The approved marketplace MVP specification supersedes legacy backlog items that conflict with it. Payment is direct between customer and executor. The marketplace does not hold funds.
+
+## MVP implementation status
+- [x] Add two-level category schema and seed the launch category tree.
+- [x] Add category create/rename/move/hide APIs and moderator screen.
+- [x] Add Other → Miscellaneous category request and moderation resolution.
+- [x] Add one-response-per-task workflow, atomic response acceptance, and rejection of competing responses.
+- [x] Create a private chat for the accepted response; participant access checks, 2,000-character limit, 4-second polling, read timestamps, hide-for-recipient and moderator transcript.
+- [x] Add task edit history and lock title/category/reward after executor selection; allow description edits and deadline extension.
+- [x] Add task completion, reviews, disputes, moderator resolution and mutual-consent cancellation.
+- [x] Add category subscriptions (20 max), Telegram onboarding quest, bot commands and hourly digest.
+- [x] Remove internal balance UI and disable the excluded repeatable-service catalog in marketplace navigation/API.
+- [ ] Finish complete end-to-end test coverage with customer, executor and moderator roles, including concurrent response acceptance and production-like DB migration.
+- [ ] Verify all Telegram event notifications and hourly digests in a live bot session.
+- [ ] Complete operational checks on Railway persistent volume and production deployment.
+- [ ] Add final UI polish and empty/error/loading states for every marketplace path.
+
 # TaskHub — список работ и недочётов
 
 Документ ведётся вместе с рефакторингом. Приоритеты отражают порядок, в котором безопасно доводить продукт до рабочего состояния. Наличие пункта в списке не означает, что он уже реализован.
