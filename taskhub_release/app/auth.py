@@ -1,8 +1,63 @@
+import base64
 import hashlib
 import hmac
 import json
 import time
 from urllib.parse import parse_qsl
+
+
+SESSION_TTL_SECONDS = 12 * 60 * 60
+SESSION_PREFIX = "th1"
+
+
+def _session_key(bot_token: str) -> bytes:
+    return hmac.new(b"TaskHubSessionV1", bot_token.encode("utf-8"), hashlib.sha256).digest()
+
+
+def create_taskhub_session(telegram_id: int, bot_token: str, now: int | None = None) -> str:
+    """Create a short-lived, server-signed bearer session after Telegram initData verification."""
+    if not bot_token or int(telegram_id) <= 0:
+        raise ValueError("A bot token and valid Telegram user ID are required")
+    issued_at = int(time.time() if now is None else now)
+    payload = json.dumps(
+        {"v": 1, "sub": int(telegram_id), "iat": issued_at, "exp": issued_at + SESSION_TTL_SECONDS},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    signature = hmac.new(_session_key(bot_token), encoded.encode("ascii"), hashlib.sha256).digest()
+    signed = base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    return f"{SESSION_PREFIX}.{encoded}.{signed}"
+
+
+def verify_taskhub_session(token: str, bot_token: str, now: int | None = None) -> int | None:
+    """Return the Telegram user ID for a valid TaskHub session, otherwise None."""
+    if not token or not bot_token:
+        return None
+    try:
+        prefix, encoded, supplied_signature = token.split(".")
+        if prefix != SESSION_PREFIX or not encoded or not supplied_signature:
+            return None
+        expected = hmac.new(_session_key(bot_token), encoded.encode("ascii"), hashlib.sha256).digest()
+        padded = supplied_signature + "=" * (-len(supplied_signature) % 4)
+        received = base64.urlsafe_b64decode(padded.encode("ascii"))
+        if not hmac.compare_digest(expected, received):
+            return None
+        payload_padded = encoded + "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_padded.encode("ascii")))
+        current = int(time.time() if now is None else now)
+        issued_at = int(payload["iat"])
+        expires_at = int(payload["exp"])
+        telegram_id = int(payload["sub"])
+        if payload.get("v") != 1 or telegram_id <= 0:
+            return None
+        if issued_at > current + 30 or expires_at <= current:
+            return None
+        if expires_at <= issued_at or expires_at - issued_at > SESSION_TTL_SECONDS:
+            return None
+        return telegram_id
+    except (ValueError, TypeError, KeyError, json.JSONDecodeError):
+        return None
 
 
 def verify_telegram_init_data(

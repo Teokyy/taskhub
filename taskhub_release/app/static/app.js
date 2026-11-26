@@ -36,9 +36,30 @@ async function api(path,opts={}){
  }
  const r=await fetch('/api'+target,{...opts,headers:{...headers,...opts.headers}});
  let data={};try{data=await r.json()}catch{}
- if(!r.ok)throw Error(data.detail||('Ошибка '+r.status));
+ if(!r.ok){const error=Error(data.detail||('Ошибка '+r.status));error.status=r.status;throw error;}
  if(path==='/ledger'&&data&&Array.isArray(data.entries))return data.entries;
  return data;
+}
+async function establishSession(){
+ let cached='';
+ try{cached=sessionStorage.getItem('taskhub_session')||''}catch{}
+ if(cached){
+  headers['X-Telegram-Init-Data']=cached;
+  try{
+   const session=await api('/session',{method:'POST'});
+   headers['X-Telegram-Init-Data']=session.token;
+   try{sessionStorage.setItem('taskhub_session',session.token)}catch{}
+   return;
+  }catch(error){
+   if(error.status!==401)throw error;
+   try{sessionStorage.removeItem('taskhub_session')}catch{}
+  }
+ }
+ headers['X-Telegram-Init-Data']=initData;
+ if(!initData)throw Error('Telegram не передал initData. Закрой и заново открой TaskHub кнопкой бота.');
+ const session=await api('/session',{method:'POST'});
+ headers['X-Telegram-Init-Data']=session.token;
+ try{sessionStorage.setItem('taskhub_session',session.token)}catch{}
 }
 function persistRoom(id){try{sessionStorage.setItem('taskhub_room_id',String(id))}catch{}}
 async function loadRooms(){
@@ -148,6 +169,7 @@ async function openOnboarding(force=false){
 
 async function boot(){
  try{
+  await establishSession();
   me=await api('/me');
   document.querySelector('#avatar').innerHTML=me.user.photo_url?'<img src="'+esc(me.user.photo_url)+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">':esc((me.user.first_name||'T').slice(0,1).toUpperCase());
   activeRoom=null;rooms=[];
@@ -160,7 +182,7 @@ async function boot(){
   else await openOnboarding(false);
  }catch(e){
   const web=window.Telegram?.WebApp,data=web?.initData||'';
-  const reason=!web?'Telegram WebApp не обнаружен.':!data?'Telegram не передал initData. Открой Mini App через кнопку бота.':'Сервер не принял запрос. Возможно, миграция комнат ещё не включена.';
+  const reason=e.status===401?'Сессия Telegram не подтверждена или истекла. Закрой Mini App и открой его заново через кнопку бота. Если ошибка повторится, нужно проверить BOT_TOKEN в Railway.':!web?'Telegram WebApp не обнаружен.':!data?'Telegram не передал initData. Открой Mini App через кнопку бота.':'Не удалось загрузить данные с сервера. Проверь API и миграцию базы данных.';
   view.innerHTML='<div class="panel"><div class="eyebrow">SIGN IN REQUIRED</div><h2>Не получилось загрузить TaskHub</h2><p class="muted">'+esc(reason)+'</p><p class="muted">'+esc(e.message)+' · initData: '+data.length+' символов</p><button class="btn secondary" onclick="location.reload()">Повторить</button></div>';
  }
 }
