@@ -15,7 +15,6 @@ function roomApiPath(path,opts={}){
  const prefix='/rooms/'+activeRoom.id;
  if(path==='/tasks')return prefix+'/tasks';
  if(path.startsWith('/tasks?'))return prefix+'/tasks'+path.slice(6);
- if(path==='/tasks'&&opts.method==='POST')return prefix+'/tasks';
  let m=path.match(/^\/tasks\/(\d+)\/(claim|submit|moderate|review|refuse)$/);
  if(m)return prefix+'/tasks/'+m[1]+'/'+m[2];
  if(path==='/moderation')return prefix+'/moderation';
@@ -382,7 +381,6 @@ async function createForm(scope='market', existing=null){
  document.querySelector('#create').onclick=async()=>{const title=document.querySelector('#title').value.trim(),reward=Number(document.querySelector('#reward').value||0);if(title.length<2)return toast('Добавь название задания');if(reward<=0)return toast('Укажи сумму вознаграждения');const selected=tree.flatMap(p=>p.children.map(c=>({id:c.id,label:p.name+' / '+c.name}))).find(c=>String(c.id)===category.value);const payload={title,description:document.querySelector('#description').value,category_id:market?Number(category.value):null,category:market?(selected?.label||'Другое'):category.value,other_category_text:document.querySelector('#other-category-text')?.value||'',reward_rub:reward,pricing_model:'fixed',deadline:document.querySelector('#deadline').value||null};if(market&&selected?.label==='Другое / Прочее'&&!payload.other_category_text.trim())return toast('Опиши, какая услуга нужна');const button=document.querySelector('#create');button.disabled=true;button.textContent=editing?'Сохраняем…':'Публикуем…';try{const url=market?'/market/tasks'+(editing?'/'+existing.id:''):'/rooms/'+activeRoom.id+'/tasks';await api(url,{method:editing?'PUT':'POST',body:JSON.stringify(payload)});document.querySelector('#createbox')?.remove();toast(editing?'Изменения сохранены':scope==='room'?'Задача добавлена в комнату':'Задание опубликовано');await refreshMe();if(scope==='room')showRoomTasks();else setTab('exchange')}catch(e){toast(e.message);button.disabled=false;button.textContent=editing?'Сохранить':'Опубликовать'}};
 }
 async function deleteMarketTask(id){if(!confirm('Снять своё задание с биржи? Оно исчезнет из открытых, но история останется в профиле.'))return;try{await api('/market/tasks/'+id,{method:'DELETE'});toast('Задание снято с публикации');await refreshMe();setTab('profile')}catch(e){toast(e.message)}}
-async function saveMarketNotificationPrefs(){const selected=[...document.querySelectorAll('[data-market-category]:checked')].map(x=>x.value);const enabled=!!document.querySelector('#market-notify-enabled')?.checked;try{await api('/market/notification-preferences',{method:'PUT',body:JSON.stringify({categories:selected,enabled})});toast('Настройки уведомлений сохранены')}catch(e){toast(e.message)}}
 async function showMarketNotificationSettings(){
  let [tree,selected]=[[],[]];try{[tree,selected]=await Promise.all([api('/categories'),api('/market/subscriptions')])}catch(e){toast(e.message);return}
  const ids=selected.map(x=>Number(x.id));
