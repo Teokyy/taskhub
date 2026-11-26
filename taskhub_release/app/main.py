@@ -1632,8 +1632,12 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
 
 def _provider_json(url: str, user_agent: str = "TaskHub/1.0 contact: support@taskhub.app"):
     request = urllib.request.Request(url, headers={"User-Agent": user_agent})
-    with urllib.request.urlopen(request, timeout=8) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        log.warning("Delivery provider request failed: %s", type(exc).__name__)
+        raise HTTPException(503, "Сервис маршрутов или погоды временно недоступен")
 
 
 def _geocode_delivery_address(city: str, address: str):
@@ -1727,6 +1731,13 @@ def upload_market_task_attachment(task_id: int, data: TaskAttachmentIn, x_telegr
         raise HTTPException(400, "Некорректный файл изображения")
     if not raw or len(raw) > 10 * 1024 * 1024:
         raise HTTPException(413, "Изображение должно быть не больше 10 МБ")
+    signatures = {
+        "image/jpeg": raw.startswith(b"\\xff\\xd8\\xff"),
+        "image/png": raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n"),
+        "image/webp": len(raw) >= 12 and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP",
+    }
+    if not signatures.get(data.mime_type, False):
+        raise HTTPException(415, "Содержимое файла не соответствует формату изображения")
     with connect() as conn:
         task = conn.execute("SELECT id,created_by,room_id FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not task or task["room_id"] is not None or int(task["created_by"]) != int(account["id"]):
