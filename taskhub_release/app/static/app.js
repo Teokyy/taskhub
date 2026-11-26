@@ -36,30 +36,35 @@ async function api(path,opts={}){
  }
  const r=await fetch('/api'+target,{...opts,headers:{...headers,...opts.headers}});
  let data={};try{data=await r.json()}catch{}
- if(!r.ok){const error=Error(data.detail||('Ошибка '+r.status));error.status=r.status;throw error;}
+ if(!r.ok){const detail=data.detail||('Ошибка '+r.status);const error=Error(detail+' ['+path+']');error.status=r.status;error.apiPath=path;throw error;}
  if(path==='/ledger'&&data&&Array.isArray(data.entries))return data.entries;
  return data;
 }
 async function establishSession(){
+ // A fresh Telegram initData is authoritative on every Mini App launch.
+ // Prefer it over sessionStorage so an old session cannot strand the user.
+ if(initData){
+  headers['X-Telegram-Init-Data']=initData;
+  const session=await api('/session',{method:'POST'});
+  if(!session?.token)throw Error('Сервер не выдал сессию TaskHub [POST /session]');
+  headers['X-Telegram-Init-Data']=session.token;
+  try{sessionStorage.setItem('taskhub_session',session.token)}catch{}
+  return;
+ }
+ // Fallback is only for WebViews that do not provide initData on reopen.
  let cached='';
  try{cached=sessionStorage.getItem('taskhub_session')||''}catch{}
- if(cached){
-  headers['X-Telegram-Init-Data']=cached;
-  try{
-   const session=await api('/session',{method:'POST'});
-   headers['X-Telegram-Init-Data']=session.token;
-   try{sessionStorage.setItem('taskhub_session',session.token)}catch{}
-   return;
-  }catch(error){
-   if(error.status!==401)throw error;
-   try{sessionStorage.removeItem('taskhub_session')}catch{}
-  }
+ if(!cached)throw Error('Telegram не передал initData и сохранённой сессии нет. Открой TaskHub через кнопку бота.');
+ headers['X-Telegram-Init-Data']=cached;
+ try{
+  const session=await api('/session',{method:'POST'});
+  if(!session?.token)throw Error('Сервер не обновил сессию TaskHub [POST /session]');
+  headers['X-Telegram-Init-Data']=session.token;
+  try{sessionStorage.setItem('taskhub_session',session.token)}catch{}
+ }catch(error){
+  try{sessionStorage.removeItem('taskhub_session')}catch{}
+  throw error;
  }
- headers['X-Telegram-Init-Data']=initData;
- if(!initData)throw Error('Telegram не передал initData. Закрой и заново открой TaskHub кнопкой бота.');
- const session=await api('/session',{method:'POST'});
- headers['X-Telegram-Init-Data']=session.token;
- try{sessionStorage.setItem('taskhub_session',session.token)}catch{}
 }
 function persistRoom(id){try{sessionStorage.setItem('taskhub_room_id',String(id))}catch{}}
 async function loadRooms(){
@@ -156,7 +161,10 @@ function renderOnboardingStep(){
 }
 async function openOnboarding(force=false){
  try{
-  const [status,tree,subscriptions]=await Promise.all([api('/onboarding'),api('/categories'),api('/market/subscriptions')]);
+  let status,tree,subscriptions;
+  try{status=await api('/onboarding')}catch(e){throw Error('Не удалось загрузить настройки знакомства: '+e.message)}
+  try{tree=await api('/categories')}catch(e){throw Error('Не удалось загрузить категории: '+e.message)}
+  try{subscriptions=await api('/market/subscriptions')}catch(e){throw Error('Не удалось загрузить подписки: '+e.message)}
   if(!force&&(status.completed||status.skipped))return;
   onboardingState={role:['customer','executor','both'].includes(status.role_flags)?status.role_flags:'both',categories:subscriptions.map(x=>Number(x.id)),tree,step:1};
   document.querySelector('#onboarding-modal')?.remove();
