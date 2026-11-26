@@ -351,6 +351,10 @@ class MarketReviewIn(BaseModel):
     text: str = Field(default="", max_length=500)
 
 
+class MarketCompletionIn(BaseModel):
+    actual_payment_rub: int = Field(ge=0, le=1000000000)
+
+
 class DisputeResolutionIn(BaseModel):
     decision: str = Field(pattern="^(done|cancelled|reopen)$")
     comment: str = Field(default="", max_length=2000)
@@ -1002,6 +1006,46 @@ def get_rooms(x_telegram_init_data: str = Header(default="", alias="X-Telegram-I
     with connect() as conn:
         ensure_rooms_schema(conn)
         return list_rooms(conn, account["id"])
+
+
+@app.put("/api/rooms/{room_id}")
+def rename_room(room_id: int, data: RoomIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    name = data.name.strip()
+    if not name or len(name) > 80:
+        raise HTTPException(422, "Название комнаты должно содержать от 1 до 80 символов")
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            member = require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        if member["room_role"] != "owner":
+            raise HTTPException(403, "Переименовать комнату может только владелец")
+        conn.execute("UPDATE rooms SET name=? WHERE id=? AND archived_at IS NULL", (name, room_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"], "rename_room", "room", room_id, name))
+        return dict(conn.execute("SELECT id,name,owner_id FROM rooms WHERE id=?", (room_id,)).fetchone())
+
+
+@app.delete("/api/rooms/{room_id}")
+def archive_room(room_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            member = require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        if member["room_role"] != "owner":
+            raise HTTPException(403, "Удалить комнату может только владелец")
+        active = conn.execute("SELECT id FROM tasks WHERE room_id=? AND status IN ('in_progress','revision','submitted') LIMIT 1", (room_id,)).fetchone()
+        if active:
+            raise HTTPException(409, f"Нельзя удалить комнату: сначала закрой задачу №{active['id']}")
+        conn.execute("UPDATE rooms SET archived_at=CURRENT_TIMESTAMP WHERE id=? AND archived_at IS NULL", (room_id,))
+        conn.execute("UPDATE room_invites SET revoked_at=CURRENT_TIMESTAMP WHERE room_id=? AND revoked_at IS NULL", (room_id,))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)", (account["id"], "archive_room", "room", room_id))
+        return {"ok": True, "archived": True}
 
 
 @app.post("/api/rooms")
@@ -2097,7 +2141,7 @@ async def request_market_cancellation(task_id: int, x_telegram_init_data: str = 
 
 
 @app.post("/api/market/tasks/{task_id}/complete")
-async def complete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+async def complete_market_task(task_id: int, data: MarketCompletionIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
     with connect() as conn:
         task=conn.execute("""SELECT t.*,r.id response_id,executor.telegram_id executor_telegram_id,
@@ -2107,9 +2151,12 @@ async def complete_market_task(task_id: int, x_telegram_init_data: str = Header(
             JOIN users owner ON owner.id=t.created_by
             WHERE t.id=? AND t.created_by=? AND t.room_id IS NULL AND t.status='in_progress'""",(task_id,account["id"])).fetchone()
         if not task: raise HTTPException(404,"Активная сделка не найдена")
-        conn.execute("UPDATE tasks SET status='done',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,))
+        conn.execute("""UPDATE tasks SET status='done',actual_payment_kop=?,actual_payment_recorded_at=CURRENT_TIMESTAMP,
+            completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='in_progress'""",
+            (data.actual_payment_rub * 100, task_id))
         conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id=?",(task["response_id"],))
-        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"complete_market_task","task",task_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"],"complete_market_task","task",task_id,f"actual_payment_rub={data.actual_payment_rub}"))
     reminder=f"🎉 Сделка «{task['title']}» завершена. Не забудьте оставить друг другу отзыв в TaskHub."
     await notify_telegram(task["executor_telegram_id"],reminder)
     await notify_telegram(task["owner_telegram_id"],reminder)

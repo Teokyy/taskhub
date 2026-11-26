@@ -89,7 +89,9 @@ class MarketplaceMvpTests(unittest.TestCase):
         response = self.client.get("/api/categories", headers=self.headers("customer"))
         self.assertEqual(response.status_code, 200)
         tree = response.json()
-        self.assertEqual(len(tree), 10)
+        self.assertEqual(len(tree), 13)
+        root_names = {parent['name'] for parent in tree}
+        self.assertTrue({'Бытовые услуги', 'Ремонт и обслуживание', 'Доставка и перевозки'}.issubset(root_names))
         self.assertTrue(all(parent["children"] for parent in tree))
         self.assertEqual(tree[-1]["name"], "Другое")
         self.assertEqual(tree[-1]["children"][0]["name"], "Прочее")
@@ -155,6 +157,7 @@ class MarketplaceMvpTests(unittest.TestCase):
         completed = self.client.post(
             f"/api/market/tasks/{task_id}/complete",
             headers=self.headers("customer"),
+            json={"actual_payment_rub": 1200},
         )
         self.assertEqual(completed.status_code, 200, completed.text)
 
