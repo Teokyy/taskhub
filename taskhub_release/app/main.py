@@ -186,6 +186,15 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 async def block_legacy_global_api(request, call_next):
     """Keep room data scoped while allowing the independent public marketplace API."""
     path = request.url.path.rstrip("/") or "/"
+    # Category catalogue is a global marketplace resource. Bypass the legacy
+    # room API guard explicitly before evaluating any legacy-route rules.
+    # Keep the raw path in logs so proxy/path-normalization issues are visible.
+    if path == "/api/categories" or path.startswith("/api/categories/"):
+        log.info(
+            "CATEGORY_API_BYPASS method=%s path=%s raw_path=%r",
+            request.method, path, request.scope.get("raw_path"),
+        )
+        return await call_next(request)
     allowed = {
         "/api/me", "/api/health", "/api/session", "/api/onboarding", "/api/categories",
         "/api/presence", "/api/market/profile", "/api/market/tasks", "/api/market/ledger",
