@@ -1676,11 +1676,13 @@ def calculate_market_delivery_quote(task_id: int, data: DeliveryQuoteIn, x_teleg
         task = conn.execute("""SELECT t.*,r.executor_id FROM tasks t
             JOIN responses r ON r.task_id=t.id AND r.status='accepted'
             WHERE t.id=? AND t.room_id IS NULL""", (task_id,)).fetchone()
-        if not task or int(task["executor_id"]) != int(account["id"]) or task["status"] != "in_progress":
-            raise HTTPException(403, "Расчёт маршрута доступен выбранному исполнителю")
+        if not task or task["status"] not in ("open", "available", "in_progress"):
+            raise HTTPException(403, "Расчёт маршрута недоступен для этого задания")
+        if task["status"] == "in_progress" and int(task["executor_id"] or -1) != int(account["id"]):
+            raise HTTPException(403, "Пересчитать тариф может только выбранный исполнитель")
         if task["task_mode"] != "irl" or not task["pickup_address"] or not task["delivery_address"]:
             raise HTTPException(409, "Для доставки нужны адрес забора и адрес назначения")
-        if task["delivery_courier_pay_kop"] is not None:
+        if task["status"] == "in_progress" and task["delivery_courier_pay_kop"] is not None:
             return {"distance_km": task["delivery_distance_km"], "weather": task["delivery_weather"],
                     "weather_factor": task["delivery_weather_factor"], "courier_pay_rub": round(task["delivery_courier_pay_kop"] / 100),
                     "locked": True}
@@ -1697,14 +1699,15 @@ def calculate_market_delivery_quote(task_id: int, data: DeliveryQuoteIn, x_teleg
         from .delivery_pricing import calculate_delivery_quote
         quote = calculate_delivery_quote(distance_km, weather)
         pay_kop = quote.total_rub * 100
-        conn.execute("""UPDATE tasks SET pickup_lat=?,pickup_lon=?,delivery_lat=?,delivery_lon=?,
-            delivery_distance_km=?,delivery_weather=?,delivery_weather_factor=?,delivery_courier_pay_kop=?,
-            updated_at=CURRENT_TIMESTAMP WHERE id=? AND delivery_courier_pay_kop IS NULL""",
-            (pickup_lat, pickup_lon, delivery_lat, delivery_lon, quote.distance_km, weather,
-             quote.weather_factor, pay_kop, task_id))
+        if task["status"] == "in_progress":
+            conn.execute("""UPDATE tasks SET pickup_lat=?,pickup_lon=?,delivery_lat=?,delivery_lon=?,
+                delivery_distance_km=?,delivery_weather=?,delivery_weather_factor=?,delivery_courier_pay_kop=?,
+                updated_at=CURRENT_TIMESTAMP WHERE id=? AND delivery_courier_pay_kop IS NULL""",
+                (pickup_lat, pickup_lon, delivery_lat, delivery_lon, quote.distance_km, weather,
+                 quote.weather_factor, pay_kop, task_id))
         return {"distance_km": quote.distance_km, "weather": weather, "weather_factor": quote.weather_factor,
                 "base_rub": quote.base_rub, "distance_rub": quote.distance_rub,
-                "courier_pay_rub": quote.total_rub, "locked": True}
+                "courier_pay_rub": quote.total_rub, "locked": task["status"] == "in_progress"}
 
 
 @app.post("/api/market/tasks/{task_id}/attachments")
