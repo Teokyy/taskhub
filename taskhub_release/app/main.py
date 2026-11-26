@@ -1677,11 +1677,11 @@ def list_market_task_attachments(task_id: int, x_telegram_init_data: str = Heade
 def get_market_task_attachment(task_id: int, attachment_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     with connect() as conn:
-        row = conn.execute("""SELECT a.file_path,a.mime_type,t.created_by,r.executor_id
+        row = conn.execute("""SELECT a.file_path,a.mime_type,t.created_by,t.status,r.executor_id
             FROM task_attachments a JOIN tasks t ON t.id=a.task_id
             LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
             WHERE a.id=? AND a.task_id=? AND t.room_id IS NULL""", (attachment_id, task_id)).fetchone()
-        if not row or int(account["id"]) not in (int(row["created_by"]), int(row["executor_id"] or -1)):
+        if not row or (int(account["id"]) not in (int(row["created_by"]), int(row["executor_id"] or -1)) and row["status"] not in ("open", "available")):
             raise HTTPException(404, "Фотография не найдена")
         path = Path(row["file_path"])
         if not path.is_file():
