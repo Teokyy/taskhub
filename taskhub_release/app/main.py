@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import mimetypes
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -355,6 +357,12 @@ class OnboardingUpdateIn(BaseModel):
     role_flags: str | None = Field(default=None, pattern="^(customer|executor|both)$")
     completed: bool | None = None
     skipped: bool | None = None
+
+
+class TaskAttachmentIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=180)
+    mime_type: str = Field(pattern="^(image/jpeg|image/png|image/webp)$")
+    data_base64: str = Field(min_length=1, max_length=14_000_000)
 
 
 class CourierProfileIn(BaseModel):
@@ -1613,6 +1621,72 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
             (account["id"], account["id"]),
         ).fetchall()
     return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "achievements": achievements, "tasks": [dict(r) for r in mine]}
+
+
+@app.post("/api/market/tasks/{task_id}/attachments")
+def upload_market_task_attachment(task_id: int, data: TaskAttachmentIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    try:
+        raw = base64.b64decode(data.data_base64, validate=True)
+    except Exception:
+        raise HTTPException(400, "Некорректный файл изображения")
+    if not raw or len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Изображение должно быть не больше 10 МБ")
+    with connect() as conn:
+        task = conn.execute("SELECT id,created_by,room_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task or task["room_id"] is not None or int(task["created_by"]) != int(account["id"]):
+            raise HTTPException(404, "Задание не найдено")
+        count = conn.execute("SELECT COUNT(*) n FROM task_attachments WHERE task_id=?", (task_id,)).fetchone()["n"]
+        if count >= 5:
+            raise HTTPException(409, "К одному заданию можно прикрепить не больше 5 фотографий")
+        upload_dir = Path(getenv("TASKHUB_UPLOAD_DIR", "/data/taskhub_uploads"))
+        try:
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            probe = upload_dir / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+        except OSError:
+            upload_dir = ROOT / "uploads"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+        extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[data.mime_type]
+        filename = secrets.token_hex(16) + extension
+        target = upload_dir / filename
+        target.write_bytes(raw)
+        cur = conn.execute(
+            "INSERT INTO task_attachments(task_id,uploader_id,file_path,mime_type,file_size) VALUES(?,?,?,?,?)",
+            (task_id, account["id"], str(target), data.mime_type, len(raw)),
+        )
+        return {"id": cur.lastrowid, "mime_type": data.mime_type, "file_size": len(raw)}
+
+
+@app.get("/api/market/tasks/{task_id}/attachments")
+def list_market_task_attachments(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        task = conn.execute("""SELECT t.created_by,r.executor_id FROM tasks t
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE t.id=? AND t.room_id IS NULL""", (task_id,)).fetchone()
+        if not task or int(account["id"]) not in (int(task["created_by"]), int(task["executor_id"] or -1)):
+            raise HTTPException(404, "Вложения не найдены")
+        rows = conn.execute("SELECT id,mime_type,file_size FROM task_attachments WHERE task_id=? ORDER BY id", (task_id,)).fetchall()
+        return [{"id": row["id"], "mime_type": row["mime_type"], "file_size": row["file_size"],
+                 "url": f"/api/market/tasks/{task_id}/attachments/{row['id']}"} for row in rows]
+
+
+@app.get("/api/market/tasks/{task_id}/attachments/{attachment_id}")
+def get_market_task_attachment(task_id: int, attachment_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        row = conn.execute("""SELECT a.file_path,a.mime_type,t.created_by,r.executor_id
+            FROM task_attachments a JOIN tasks t ON t.id=a.task_id
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE a.id=? AND a.task_id=? AND t.room_id IS NULL""", (attachment_id, task_id)).fetchone()
+        if not row or int(account["id"]) not in (int(row["created_by"]), int(row["executor_id"] or -1)):
+            raise HTTPException(404, "Фотография не найдена")
+        path = Path(row["file_path"])
+        if not path.is_file():
+            raise HTTPException(404, "Фотография больше недоступна")
+        return FileResponse(path, media_type=row["mime_type"], filename=path.name)
 
 
 @app.get("/api/market/courier-profile")
