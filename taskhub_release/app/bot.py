@@ -99,9 +99,11 @@ async def start_bot():
             reply_markup=keyboard
         )
 
-    async def show_category_step(target):
+    async def show_category_step(target, telegram_user_id=None):
+        telegram_user_id = telegram_user_id or target.from_user.id
         with connect() as conn:
-            user_row=conn.execute("SELECT id FROM users WHERE telegram_id=?",(target.from_user.id,)).fetchone()
+            user_row=conn.execute("SELECT id FROM users WHERE telegram_id=?",(telegram_user_id,)).fetchone()
+
             categories=conn.execute("SELECT id,name FROM categories WHERE parent_id IS NULL AND is_hidden=0 ORDER BY id").fetchall()
             selected={x["category_id"] for x in conn.execute("SELECT category_id FROM subscriptions WHERE user_id=?",(user_row["id"],)).fetchall()}
         buttons=[]
@@ -111,9 +113,11 @@ async def start_bot():
         buttons.append([InlineKeyboardButton(text="Готово →",callback_data="quest:categories_done")])
         await target.answer("Прогресс: ▰▰▱\nШаг 2 из 3 — выбери направления, о которых сообщать. Можно несколько.",reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
-    async def show_first_action(target):
+    async def show_first_action(target, telegram_user_id=None):
+        telegram_user_id = telegram_user_id or target.from_user.id
         with connect() as conn:
-            row=conn.execute("SELECT role_flags FROM users WHERE telegram_id=?",(target.from_user.id,)).fetchone()
+            row=conn.execute("SELECT role_flags FROM users WHERE telegram_id=?",(telegram_user_id,)).fetchone()
+
         role_flags=(row["role_flags"] if row else "both")
         buttons=[]
         if role_flags in ("customer","both"):
@@ -208,7 +212,7 @@ async def start_bot():
             elif action[1]=="role" and len(action)==3 and action[2] in ("customer","executor","both"):
                 conn.execute("UPDATE users SET role_flags=?,onboarding_step=2 WHERE id=?",(action[2],user_id))
                 await callback.answer("Роль сохранена")
-                await show_category_step(callback.message)
+                await show_category_step(callback.message, telegram_id)
             elif action[1]=="category" and len(action)==3 and action[2].isdigit():
                 category_id=int(action[2])
                 category=conn.execute("SELECT id FROM categories WHERE id=? AND parent_id IS NULL AND is_hidden=0",(category_id,)).fetchone()
@@ -225,11 +229,11 @@ async def start_bot():
                         return
                     conn.execute("INSERT INTO subscriptions(user_id,category_id) VALUES(?,?)",(user_id,category_id))
                 await callback.answer("Выбор обновлён")
-                await show_category_step(callback.message)
+                await show_category_step(callback.message, telegram_id)
             elif action[1]=="categories_done":
                 conn.execute("UPDATE users SET onboarding_step=3 WHERE id=?",(user_id,))
                 await callback.answer("Подписки сохранены")
-                await show_first_action(callback.message)
+                await show_first_action(callback.message, telegram_id)
             elif action[1]=="finish":
                 conn.execute("UPDATE users SET onboarding_step=0,onboarding_completed_at=CURRENT_TIMESTAMP WHERE id=?",(user_id,))
                 conn.execute("INSERT OR IGNORE INTO achievements(user_id,code) VALUES(?,'first_quest')",(user_id,))
