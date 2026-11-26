@@ -1732,8 +1732,8 @@ def upload_market_task_attachment(task_id: int, data: TaskAttachmentIn, x_telegr
     if not raw or len(raw) > 10 * 1024 * 1024:
         raise HTTPException(413, "Изображение должно быть не больше 10 МБ")
     signatures = {
-        "image/jpeg": raw.startswith(b"\\xff\\xd8\\xff"),
-        "image/png": raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n"),
+        "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
+        "image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
         "image/webp": len(raw) >= 12 and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP",
     }
     if not signatures.get(data.mime_type, False):
