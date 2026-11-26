@@ -4,7 +4,7 @@ const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
 const startupParams=new URLSearchParams(window.location.search);
-let me=null,tab=['room','exchange','profile','chats'].includes(startupParams.get('tab'))?startupParams.get('tab'):'exchange',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
+let me=null,tab=['room','exchange','profile','chats'].includes(startupParams.get('tab'))?startupParams.get('tab'):'exchange',toastTimer,dealChatTimer=null,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
@@ -267,11 +267,12 @@ async function createMarketDispute(id){const reason=prompt('Опиши проб�
 async function createMarketReview(id){const rating=Number(prompt('Оценка от 1 до 5','5'));if(!Number.isInteger(rating)||rating<1||rating>5)return toast('Оценка должна быть от 1 до 5');const text=prompt('Короткий отзыв (необязательно)','')||'';try{await api('/market/tasks/'+id+'/reviews',{method:'POST',body:JSON.stringify({rating,text})});toast('Отзыв сохранён')}catch(e){toast(e.message)}}
 async function showDealChatByTask(taskId){const rows=await api('/market/chats');const chat=rows.find(x=>String(x.task_id)===String(taskId));if(chat)showDealChat(chat.chat_id,chat.title);else toast('Чат сделки не найден')}
 async function showDealChat(chatId,title){
- let lastId=0;view.innerHTML='<div class="section-head"><button class="btn ghost" id="chat-back">← Профиль</button><h2>'+esc(title||'Чат сделки')+'</h2></div><div id="deal-messages" class="panel" style="min-height:220px"></div><textarea class="field" id="deal-message" maxlength="2000" placeholder="Напиши сообщение…"></textarea><button class="btn block" id="send-deal-message">Отправить</button>';
+ if(dealChatTimer){clearInterval(dealChatTimer);dealChatTimer=null;}
+ let lastId=0;view.innerHTML='<div class="section-head"><button class="btn ghost" id="chat-back">← Профиль</button><h2>'+esc(title||'Чат сделки')+'</h2></div><div id="deal-messages" class="panel" data-chat-id="'+esc(chatId)+'" style="min-height:220px"></div><textarea class="field" id="deal-message" maxlength="2000" placeholder="Напиши сообщение…"></textarea><button class="btn block" id="send-deal-message">Отправить</button>';
  document.querySelector('#chat-back').onclick=()=>setTab('profile');
  const load=async()=>{try{const rows=await api('/market/chats/'+chatId+'/messages?after_id='+lastId);const box=document.querySelector('#deal-messages');if(!box)return;rows.forEach(x=>{lastId=Math.max(lastId,x.id);box.insertAdjacentHTML('beforeend','<div style="padding:8px 0;border-bottom:1px solid var(--line)" data-message-row="'+x.id+'"><b>'+esc(x.sender_name)+'</b><p style="margin:4px 0">'+esc(x.text)+'</p><small class="muted">'+esc(x.created_at)+'</small>'+(Number(x.sender_id)===Number(me.user.id)?'<button class="btn ghost" data-hide-message="'+x.id+'">Скрыть для собеседника</button>':'')+'</div>')});view.querySelectorAll('[data-hide-message]').forEach(b=>b.onclick=async()=>{try{await api('/market/messages/'+b.dataset.hideMessage+'/hide',{method:'POST'});b.disabled=true;b.textContent='Скрыто для собеседника'}catch(e){toast(e.message)}});}catch(e){toast(e.message)}};
 
- await load();const timer=setInterval(()=>{if(document.querySelector('#deal-messages'))load();else clearInterval(timer)},4000);
+ await load();dealChatTimer=setInterval(()=>{const box=document.querySelector('#deal-messages');if(box&&box.dataset.chatId===String(chatId))load();else{clearInterval(dealChatTimer);dealChatTimer=null}},4000);
  document.querySelector('#send-deal-message').onclick=async()=>{const el=document.querySelector('#deal-message'),text=el.value.trim();if(!text)return;try{const r=await api('/market/chats/'+chatId+'/messages',{method:'POST',body:JSON.stringify({body:text})});el.value='';if(r.warning_external_contact)toast('Напоминание: не передавай личные контакты незнакомым пользователям');await load()}catch(e){toast(e.message)}};
 }
 
