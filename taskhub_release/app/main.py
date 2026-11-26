@@ -1175,14 +1175,24 @@ def put_room_mode(room_id: int, data: RoomModeIn,
             room_error(error)
 
 
+def _taskhub_session_secret() -> str:
+    token = getenv("BOT_TOKEN", "").strip()
+    if token:
+        return token
+    if getenv("DEV_MODE", "false").lower() == "true":
+        return getenv("TASKHUB_DEV_SESSION_SECRET", "taskhub-local-development-session-secret")
+    return ""
+
+
 def current_user(init_data: str):
     token = getenv("BOT_TOKEN", "").strip()
+    session_secret = _taskhub_session_secret()
 
     # A Telegram initData payload is short-lived. Exchange it once for a
     # server-signed session so an already-open Mini App does not lose API
     # access after the original Telegram auth_date ages past one hour.
     if init_data.startswith("th1."):
-        telegram_id = verify_taskhub_session(init_data, token)
+        telegram_id = verify_taskhub_session(init_data, session_secret)
         if not telegram_id:
             raise HTTPException(401, "Сессия TaskHub истекла. Закройте и заново откройте приложение через Telegram.")
         with connect() as conn:
@@ -1267,7 +1277,7 @@ def health():
 @app.post("/api/session")
 def create_session(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
-    session_token = create_taskhub_session(account["telegram_id"], getenv("BOT_TOKEN", "").strip())
+    session_token = create_taskhub_session(account["telegram_id"], _taskhub_session_secret())
     return {"token": session_token, "expires_in": 12 * 60 * 60}
 
 
