@@ -43,6 +43,23 @@ class MarketplaceMvpTests(unittest.TestCase):
     def headers(self, account):
         return {"X-Telegram-Init-Data": account}
 
+    def test_profile_endpoint_returns_user_and_marketplace_summary(self):
+        response = self.client.get("/api/market/profile", headers=self.headers("customer"))
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["user"]["telegram_id"], 101)
+        self.assertIn("tasks", payload)
+        self.assertIn("counts", payload)
+        self.assertIn("rating_average", payload)
+        self.assertIn("achievements", payload)
+
+    def test_session_endpoint_issues_signed_session_after_authentication(self):
+        with patch.dict("os.environ", {"BOT_TOKEN": "123456:TEST_TOKEN"}):
+            response = self.client.post("/api/session", headers=self.headers("customer"))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["token"].startswith("th1."))
+        self.assertEqual(response.json()["expires_in"], 12 * 60 * 60)
+
     def create_task(self):
         tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
         marketing = next(x for x in tree if x["name"] == "Маркетинг")
