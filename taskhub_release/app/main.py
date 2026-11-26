@@ -205,7 +205,15 @@ async def block_legacy_global_api(request, call_next):
             migrated = False
         if migrated:
             return JSONResponse(status_code=410, content={"detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи."})
-    return await call_next(request)
+    response = await call_next(request)
+    # Telegram WebViews can retain an old Mini App bundle across deployments.
+    # Always revalidate the entry point and application bundle so frontend API
+    # routes cannot remain out of sync with the backend after a release.
+    if path in ("/", "/index.html", "/static/index.html", "/static/app.js"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 
@@ -1271,7 +1279,13 @@ def update_user_presence(x_telegram_init_data: str = Header(default="", alias="X
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "service": "TaskHub", "telegram_bot": _bot_status}
+    return {
+        "ok": True,
+        "service": "TaskHub",
+        "telegram_bot": _bot_status,
+        "api_contract": "marketplace-v1-rooms-v1",
+        "release": getenv("RAILWAY_GIT_COMMIT_SHA", "local"),
+    }
 
 
 @app.post("/api/session")
