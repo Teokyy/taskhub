@@ -187,7 +187,7 @@ async def block_legacy_global_api(request, call_next):
     """Keep room data scoped while allowing the independent public marketplace API."""
     path = request.url.path
     allowed = {
-        "/api/me", "/api/health", "/api/market/profile",
+        "/api/me", "/api/health", "/api/onboarding", "/api/categories", "/api/market/profile",
         "/api/market/tasks", "/api/market/ledger",
     }
     if path.startswith("/api/market/tasks/"):
@@ -309,6 +309,12 @@ class CategoryRequestResolveIn(BaseModel):
 
 class SubscriptionUpdateIn(BaseModel):
     category_ids: list[int] = Field(default_factory=list, max_length=20)
+
+
+class OnboardingUpdateIn(BaseModel):
+    role_flags: str | None = Field(default=None, pattern="^(customer|executor|both)$")
+    completed: bool | None = None
+    skipped: bool | None = None
 
 
 class MarketResponseIn(BaseModel):
@@ -1420,6 +1426,44 @@ async def resolve_category_request(request_id: int, data: CategoryRequestResolve
     await notify_telegram(row["telegram_id"],f"📂 Решение по твоей заявке на категорию для задания «{row['title']}»: {data.status}. {data.note}".strip())
     return {"ok":True,"status":data.status}
 
+
+
+@app.get("/api/onboarding")
+def get_onboarding(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    with connect() as conn:
+        row=conn.execute(
+            "SELECT role_flags,onboarding_step,onboarding_completed_at,onboarding_skipped_at FROM users WHERE id=?",
+            (account["id"],)
+        ).fetchone()
+    return {
+        "role_flags": row["role_flags"] or "none",
+        "step": row["onboarding_step"] or 0,
+        "completed": bool(row["onboarding_completed_at"]),
+        "skipped": bool(row["onboarding_skipped_at"]),
+    }
+
+
+@app.put("/api/onboarding")
+def update_onboarding(data: OnboardingUpdateIn,
+                      x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account=user(x_telegram_init_data)
+    updates=[]
+    values=[]
+    if data.role_flags is not None:
+        updates.extend(["role_flags=?","onboarding_step=2","onboarding_skipped_at=NULL"])
+        values.append(data.role_flags)
+    if data.completed is True:
+        updates.extend(["onboarding_completed_at=CURRENT_TIMESTAMP","onboarding_step=0","onboarding_skipped_at=NULL"])
+    if data.skipped is True:
+        updates.extend(["onboarding_skipped_at=CURRENT_TIMESTAMP","onboarding_step=0"])
+    if updates:
+        with connect() as conn:
+            conn.execute("UPDATE users SET "+",".join(updates)+" WHERE id=?",(*values,account["id"]))
+            conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                         (account["id"],"update_onboarding","user",account["id"],
+                          "role_flags="+str(data.role_flags or "")+";completed="+str(data.completed)+";skipped="+str(data.skipped)))
+    return {"ok":True}
 
 
 @app.get("/api/market/subscriptions")
