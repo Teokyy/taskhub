@@ -30,14 +30,15 @@
     .btn{border:0;border-radius:13px;padding:12px 16px;background:var(--lime);color:var(--lime-ink);font-weight:800;font-size:13px}.btn.block{width:100%}.btn.secondary{background:#293128;color:var(--text);border:1px solid var(--line)}.btn.ghost{background:transparent;color:var(--muted);padding:8px}.btn.danger{background:#512b28;color:#ffc0b8}.btn:disabled{opacity:.45;cursor:default}
     .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:13px}
     .nav{position:fixed;z-index:10;left:0;right:0;bottom:0;padding:9px 9px calc(9px + env(safe-area-inset-bottom));display:flex;justify-content:center;background:#141914ed;border-top:1px solid #303a30;backdrop-filter:blur(18px)}
-    .nav-inner{width:100%;max-width:650px;display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+    .nav-inner{width:100%;max-width:650px;display:grid;grid-template-columns:repeat(3,1fr);gap:3px}
     .nav button{border:0;background:transparent;color:#899386;border-radius:13px;padding:8px 2px 7px;font-size:10px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:4px}
     .nav button .ico{font-size:18px;line-height:1.1}.nav button.active{background:#293128;color:var(--lime)}
     .field{width:100%;border:1px solid var(--line);background:#111611;color:var(--text);border-radius:12px;padding:13px;margin:6px 0 12px;outline:none}
     .field:focus{border-color:#91b64b}textarea.field{min-height:105px;resize:vertical}
     label{display:block;color:var(--muted);font-size:12px;font-weight:700;margin-top:7px}
     .empty{padding:28px 18px;text-align:center;color:var(--muted);background:var(--panel);border:1px dashed #3a4539;border-radius:18px}.empty b{display:block;color:var(--text);margin-bottom:5px}
-    .profile-name{font-size:22px;font-weight:850;letter-spacing:-.7px}.profile-row{display:flex;align-items:center;gap:13px}
+    .profile-name{font-size:22px;font-weight:850;letter-spacing:-.7px}.balance-card{display:flex;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(120deg,#243522,#1c291c);border:1px solid #536b3e}.balance-amount{font-size:28px;font-weight:900;color:#d3f58a;margin-top:4px}.balance-caption{font-size:11px;color:#bdc8b2;margin-top:3px}.balance-open{background:#c7f36b;color:#17200c;white-space:nowrap}
+    .profile-row{display:flex;align-items:center;gap:13px}
     .big-avatar{width:54px;height:54px;border-radius:18px;background:var(--lime);color:var(--lime-ink);display:grid;place-items:center;font-size:22px;font-weight:900}
     .ledger-row{display:flex;justify-content:space-between;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}.ledger-row:last-child{border:0}.ledger-row b{font-size:14px}.ledger-row small{display:block;color:var(--muted);font-size:11px;margin-top:3px}.positive{color:var(--lime)}
     .toast{position:fixed;z-index:30;left:18px;right:18px;bottom:calc(90px + env(safe-area-inset-bottom));max-width:610px;margin:auto;background:#e9f5d5;color:#1b2610;border-radius:14px;padding:13px 16px;font-size:13px;font-weight:750;box-shadow:0 12px 35px #0007}
@@ -223,11 +224,10 @@ html[data-theme="light"] .nav{
   <nav class="nav" aria-label="Основная навигация"><div class="nav-inner">
     <button data-tab="room"><span class="ico">▦</span>Комнаты</button>
     <button data-tab="exchange"><span class="ico">▤</span>Биржа</button>
-    <button data-tab="chats"><span class="ico">☷</span>Диалоги</button>
     <button data-tab="profile"><span class="ico">◉</span>Профиль</button>
   </div></nav>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=37"></script>
+  <script src="/static/app.js?v=38"></script>
   <script src="/static/budget.js?v=2"></script>
   <script>
     document.addEventListener('click', async event => {
