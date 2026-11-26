@@ -50,6 +50,14 @@ class RoomApiIntegrationTests(unittest.TestCase):
     def headers(self, token):
         return {"X-Telegram-Init-Data": token}
 
+    def test_global_categories_api_survives_room_migration(self):
+        # The marketplace category tree is account-global, not room-scoped.
+        # It must remain available after the legacy room migration creates
+        # the rooms table (which activates the legacy API guard).
+        response = self.client.get("/api/categories", headers=self.headers("owner-token"))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIsInstance(response.json(), list)
+
     def test_room_project_stage_task_acceptance_and_ledger(self):
         owner = self.headers("owner-token")
         worker = self.headers("worker-token")
