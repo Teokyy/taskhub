@@ -360,6 +360,9 @@ def init_db():
             "Видео и аудио": ["Видеомонтаж", "Озвучка", "Motion-дизайн", "Подкасты"],
             "Образование и репетиторство": ["Языки", "Школьные предметы", "Программирование", "Подготовка к экзаменам"],
             "Бизнес и финансы": ["Бухгалтерия", "Юридическая помощь", "Бизнес-планы", "Консультации"],
+            "Бытовые услуги": ["Сборка мебели", "Разборка мебели", "Установка карнизов и полок", "Мелкий ремонт", "Сантехника", "Электрика", "Уборка квартиры", "Мытьё окон", "Генеральная уборка", "Помощь при переезде", "Погрузка и разгрузка", "Доставка документов", "Доставка продуктов", "Курьерская доставка", "Вынос мусора", "Помощь по дому"],
+            "Ремонт и обслуживание": ["Ремонт бытовой техники", "Ремонт компьютеров", "Настройка Wi-Fi и роутеров", "Сборка ПК", "Ремонт телефонов", "Обслуживание кондиционеров"],
+            "Доставка и перевозки": ["Курьер пешком", "Доставка на велосипеде", "Доставка на автомобиле", "Грузоперевозки", "Перевозка мебели", "Доставка крупногабаритных вещей"],
             "Другое": ["Прочее"],
         }
         for parent_name, children in category_tree.items():
@@ -367,6 +370,9 @@ def init_db():
             parent_id = conn.execute("SELECT id FROM categories WHERE name=? AND parent_id IS NULL", (parent_name,)).fetchone()["id"]
             for child_name in children:
                 conn.execute("INSERT OR IGNORE INTO categories(name,parent_id) VALUES(?,?)", (child_name,parent_id))
+        # Hide duplicate root-level fallback categories without deleting IDs used by old tasks.
+        conn.execute("""UPDATE categories SET is_hidden=1 WHERE parent_id IS NULL AND name='Другое'
+            AND id<>(SELECT MIN(id) FROM categories WHERE parent_id IS NULL AND name='Другое')""")
         conn.execute("UPDATE users SET role_flags='none' WHERE onboarding_step=0 AND onboarding_completed_at IS NULL AND onboarding_skipped_at IS NULL AND NOT EXISTS (SELECT 1 FROM subscriptions WHERE subscriptions.user_id=users.id)")
         conn.execute("UPDATE tasks SET author_id=created_by WHERE author_id IS NULL AND created_by IS NOT NULL")
         conn.execute("UPDATE tasks SET status='open' WHERE room_id IS NULL AND status='available' AND assignee_id IS NULL")
