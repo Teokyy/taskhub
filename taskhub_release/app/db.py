@@ -346,6 +346,8 @@ def init_db():
         _add_column(conn, "tasks", "author_id INTEGER REFERENCES users(id)")
         _add_column(conn, "tasks", "dispute_status TEXT")
         _add_column(conn, "tasks", "completed_at TEXT")
+        _add_column(conn, "tasks", "actual_payment_kop INTEGER CHECK(actual_payment_kop IS NULL OR actual_payment_kop>=0)")
+        _add_column(conn, "tasks", "actual_payment_recorded_at TEXT")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category_status_created ON tasks(category_id,status,created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_market_tasks_feed ON tasks(room_id,status,id DESC)")
 
