@@ -1674,7 +1674,7 @@ def calculate_market_delivery_quote(task_id: int, data: DeliveryQuoteIn, x_teleg
     account = user(x_telegram_init_data)
     with connect() as conn:
         task = conn.execute("""SELECT t.*,r.executor_id FROM tasks t
-            JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
             WHERE t.id=? AND t.room_id IS NULL""", (task_id,)).fetchone()
         if not task or task["status"] not in ("open", "available", "in_progress"):
             raise HTTPException(403, "Расчёт маршрута недоступен для этого задания")
