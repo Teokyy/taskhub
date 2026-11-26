@@ -262,6 +262,20 @@ class RoomApiIntegrationTests(unittest.TestCase):
                 self.assertEqual(response.status_code, expected_status, response.text)
                 self.assertNotIn("Этот адрес относится к старому API", response.text)
 
+    def test_active_global_api_endpoints_are_not_blocked_as_legacy(self):
+        owner = self.headers("owner-token")
+        checks = [
+            ("GET", "/api/presence", 405),
+            ("POST", "/api/presence", 200),
+            ("GET", "/api/category-requests?status=pending", 200),
+            ("GET", "/api/moderation/disputes", 200),
+        ]
+        for method, path, expected_status in checks:
+            with self.subTest(method=method, path=path):
+                response = self.client.request(method, path, headers=owner)
+                self.assertEqual(response.status_code, expected_status, response.text)
+                self.assertNotIn("Этот адрес относится к старому API", response.text)
+
     def test_cross_room_and_legacy_api_are_blocked(self):
         owner = self.headers("owner-token")
         worker = self.headers("worker-token")
