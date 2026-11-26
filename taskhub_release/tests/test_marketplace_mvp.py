@@ -60,6 +60,12 @@ class MarketplaceMvpTests(unittest.TestCase):
         self.assertTrue(response.json()["token"].startswith("th1."))
         self.assertEqual(response.json()["expires_in"], 12 * 60 * 60)
 
+    def test_session_endpoint_supports_local_dev_mode_without_bot_token(self):
+        with patch.dict("os.environ", {"BOT_TOKEN": "", "DEV_MODE": "true"}):
+            response = self.client.post("/api/session", headers=self.headers("customer"))
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertTrue(response.json()["token"].startswith("th1."))
+
     def create_task(self):
         tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
         marketing = next(x for x in tree if x["name"] == "Маркетинг")
