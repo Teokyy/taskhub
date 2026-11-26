@@ -116,7 +116,7 @@
     .brand{font-size:22px;letter-spacing:-1px;font-weight:850;color:#f3f5f1}
     .brand span{color:var(--lime)!important}
     .brand .brand-dot{font-style:normal;color:var(--lime)}
-    .nav-inner{grid-template-columns:repeat(3,minmax(0,1fr));max-width:620px;gap:7px}
+    .nav-inner{grid-template-columns:repeat(4,minmax(0,1fr));max-width:620px;gap:5px}
     .nav button{flex-direction:column;justify-content:center;gap:4px;padding:9px 5px 8px;font-size:11px;border-radius:14px}
     .nav button .ico{font-size:18px}
     .nav button.active{background:#263a25;border-color:#476340;color:var(--lime)}
@@ -221,12 +221,13 @@ html[data-theme="light"] .nav{
     <main id="view"><div class="empty">Загружаем рабочее пространство…</div></main>
   </div>
   <nav class="nav" aria-label="Основная навигация"><div class="nav-inner">
-    <button data-tab="chats"><span class="ico">☷</span>Диалоги</button>
+    <button data-tab="room"><span class="ico">▦</span>Комнаты</button>
     <button data-tab="exchange"><span class="ico">▤</span>Биржа</button>
+    <button data-tab="chats"><span class="ico">☷</span>Диалоги</button>
     <button data-tab="profile"><span class="ico">◉</span>Профиль</button>
   </div></nav>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=31"></script>
+  <script src="/static/app.js?v=32"></script>
   <script src="/static/budget.js?v=2"></script>
   <script>
     document.addEventListener('click', async event => {
