@@ -207,14 +207,12 @@ function showModeSetup(){
 async function setMode(mode){try{if(!activeRoom?.id){await loadRooms();renderRoomSelector()}if(!activeRoom?.id)throw Error('Не удалось определить комнату. Обнови экран и попробуй снова.');const roomId=activeRoom.id;await api('/rooms/'+roomId+'/mode',{method:'PUT',body:JSON.stringify({mode})});activeRoom={...activeRoom,work_mode:mode};persistRoom(roomId);await refreshMe();toast('Режим комнаты сохранён');setTab('room')}catch(e){toast(e.message)}}
 
 function empty(title,desc,action=''){return '<div class="empty"><b>'+esc(title)+'</b>'+esc(desc)+(action||'')+'</div>'}
-function openDeliveryRoute(taskId){
- const task=[...(me?.tasks||[]),...(window.marketTaskCache||[])].find(t=>Number(t.id)===Number(taskId));
- if(!task)return toast('Не удалось загрузить адреса доставки');
- const pickup=(task.pickup_address||'').trim(),delivery=(task.delivery_address||'').trim();
+function openDeliveryRoute(button){
+ const pickup=(button.dataset.pickup||'').trim(),delivery=(button.dataset.delivery||'').trim(),transport=button.dataset.transport||'walk';
  if(!pickup&&!delivery)return toast('В задании не указаны точки маршрута');
  const destination=delivery||pickup,waypoints=pickup&&delivery?pickup:'';
  const open=(origin)=>{
-  const params=new URLSearchParams({api:'1',destination,travelmode:task.transport==='walk'?'walking':task.transport==='bicycle'?'bicycling':'driving'});
+  const params=new URLSearchParams({api:'1',destination,travelmode:transport==='walk'?'walking':transport==='bicycle'?'bicycling':'driving'});
   if(origin)params.set('origin',origin);
   if(waypoints)params.set('waypoints',waypoints);
   window.open('https://www.google.com/maps/dir/?'+params.toString(),'_blank','noopener');
@@ -251,7 +249,7 @@ function taskCard(t,adminView=false){
  if(['in_progress','revision'].includes(t.status)&&executor&&!marketTask)action='<button class="btn" data-submit="'+t.id+'" data-market="0">Сдать работу</button>';
  const statuses={open:'Открыта',available:'Открыта',in_progress:'В работе',submitted:'На проверке',revision:'Нужна доработка',accepted:'Принята',done:'Завершена',disputed:'Спор',rejected:'Отклонена',cancelled:'Отменена',not_completed:'Не выполнена'};
  const irl=marketTask&&t.task_mode==='irl';
- const routeButton=irl&&executor&&t.status==='in_progress'&&(t.pickup_address||t.delivery_address)?'<button class="btn secondary" data-delivery-route="'+t.id+'">Показать маршрут</button>':'';
+ const routeButton=irl&&executor&&t.status==='in_progress'&&(t.pickup_address||t.delivery_address)?'<button class="btn secondary" data-delivery-route="'+t.id+'" data-pickup="'+esc(t.pickup_address||'')+'" data-delivery="'+esc(t.delivery_address||'')+'" data-transport="'+esc(t.transport||'walk')+'">Показать маршрут</button>':'';
  const photosButton=irl?'<button class="btn secondary" data-task-photos="'+t.id+'">Фотографии</button>':'';
  const irlDetails=irl?'<div class="muted" style="font-size:12px;margin-top:8px">📍 '+esc(t.city||'Город не указан')+(t.pickup_address?'<br>Забрать: '+esc(t.pickup_address):'')+(t.delivery_address?'<br>Доставить: '+esc(t.delivery_address):'')+(t.parcel_weight_kg?'<br>Вес: '+esc(t.parcel_weight_kg)+' кг':'')+((t.parcel_length_cm&&t.parcel_width_cm&&t.parcel_height_cm)?'<br>Габариты: '+esc(t.parcel_length_cm)+' × '+esc(t.parcel_width_cm)+' × '+esc(t.parcel_height_cm)+' см':'')+'</div>':'';
  return '<article class="panel task"><div class="task-top"><span class="pill">'+esc(t.category||'Другое')+(irl?' · IRL':'')+'</span><span class="price">'+rub(t.reward_kop)+'</span></div><h3>'+esc(t.title)+'</h3><p>'+esc(t.description||'Без дополнительного описания')+'</p>'+irlDetails+'<div class="task-bottom"><span class="status">'+(statuses[t.status]||esc(t.status))+'</span><span class="deadline">'+(t.deadline?'До '+esc(t.deadline):'Без срока')+'</span></div>'+(adminView&&t.assignee_name?'<div class="divider"></div><span class="muted">Исполнитель: '+esc(t.assignee_name)+'</span>':'')+((action||routeButton||photosButton)?'<div class="actions">'+action+routeButton+photosButton+'</div>':'')+'</article>'
@@ -266,7 +264,7 @@ async function showTaskPhotos(taskId){
 }
 function bindTaskActions(){
  view.querySelectorAll('[data-task-photos]').forEach(b=>b.onclick=()=>showTaskPhotos(b.dataset.taskPhotos));
- view.querySelectorAll('[data-delivery-route]').forEach(b=>b.onclick=()=>openDeliveryRoute(b.dataset.deliveryRoute));
+ view.querySelectorAll('[data-delivery-route]').forEach(b=>b.onclick=()=>openDeliveryRoute(b));
  view.querySelectorAll('[data-claim]').forEach(b=>b.onclick=()=>claim(b.dataset.claim));
  view.querySelectorAll('[data-market-claim]').forEach(b=>b.onclick=()=>claimMarketTask(b.dataset.marketClaim));
  view.querySelectorAll('[data-submit]').forEach(b=>b.onclick=()=>submitForm(b.dataset.submit,b.dataset.market==='1'));
