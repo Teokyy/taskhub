@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .auth import verify_telegram_init_data
+from .auth import create_taskhub_session, verify_taskhub_session, verify_telegram_init_data
 from .db import connect, init_db
 from .rooms import (RoomError, create_room as create_room_record, list_rooms, set_work_mode as set_room_work_mode, require_admin as require_room_admin, require_member as require_room_member, require_mode as require_room_mode)
 from .room_task_actions import router as room_task_actions_router
@@ -187,7 +187,7 @@ async def block_legacy_global_api(request, call_next):
     """Keep room data scoped while allowing the independent public marketplace API."""
     path = request.url.path.rstrip("/") or "/"
     allowed = {
-        "/api/me", "/api/health", "/api/onboarding", "/api/categories", "/api/market/profile",
+        "/api/me", "/api/health", "/api/session", "/api/onboarding", "/api/categories", "/api/market/profile",
         "/api/market/tasks", "/api/market/ledger",
     }
     # Onboarding and category endpoints are global account preferences, not legacy room data.
@@ -1177,12 +1177,33 @@ def put_room_mode(room_id: int, data: RoomModeIn,
 
 def current_user(init_data: str):
     token = getenv("BOT_TOKEN", "").strip()
+
+    # A Telegram initData payload is short-lived. Exchange it once for a
+    # server-signed session so an already-open Mini App does not lose API
+    # access after the original Telegram auth_date ages past one hour.
+    if init_data.startswith("th1."):
+        telegram_id = verify_taskhub_session(init_data, token)
+        if not telegram_id:
+            raise HTTPException(401, "Сессия TaskHub истекла. Закройте и заново откройте приложение через Telegram.")
+        with connect() as conn:
+            account = conn.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,)).fetchone()
+            if not account:
+                raise HTTPException(401, "Пользовательская сессия больше не действительна. Откройте TaskHub через Telegram.")
+            return dict(account)
+
     telegram_user = verify_telegram_init_data(init_data, token)
     dev_mode = getenv("DEV_MODE", "false").lower() == "true"
     if not telegram_user and dev_mode:
         telegram_user = {"id": 999000, "first_name": "Разработчик", "username": "dev"}
     if not telegram_user:
-        raise HTTPException(401, "Откройте TaskHub через Telegram")
+        log.warning(
+            "TELEGRAM_AUTH_REJECTED init_data_present=%s init_data_length=%s bot_token_configured=%s",
+            bool(init_data), len(init_data or ""), bool(token),
+        )
+        raise HTTPException(
+            401,
+            "Telegram не подтвердил вход. Откройте TaskHub кнопкой бота; если ошибка повторяется, проверьте BOT_TOKEN в Railway.",
+        )
     telegram_id = int(telegram_user["id"])
     admin_ids = {int(value.strip()) for value in getenv("ADMIN_TELEGRAM_IDS", "").split(",") if value.strip().isdigit()}
     moderator_ids = {int(value.strip()) for value in getenv("MODERATOR_TELEGRAM_IDS", "").split(",") if value.strip().isdigit()}
@@ -1241,6 +1262,13 @@ def update_user_presence(x_telegram_init_data: str = Header(default="", alias="X
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "TaskHub", "telegram_bot": _bot_status}
+
+
+@app.post("/api/session")
+def create_session(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    session_token = create_taskhub_session(account["telegram_id"], getenv("BOT_TOKEN", "").strip())
+    return {"token": session_token, "expires_in": 12 * 60 * 60}
 
 
 @app.get("/api/me")
