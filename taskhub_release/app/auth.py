@@ -77,7 +77,7 @@ def verify_telegram_init_data(
         received_hash = values.pop("hash", None)
         if not received_hash:
             return None
-        check = "\\n".join(f"{key}={value}" for key, value in sorted(values.items()))
+        check = "\n".join(f"{key}={value}" for key, value in sorted(values.items()))
         secret = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
         expected = hmac.new(secret, check.encode("utf-8"), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, received_hash):
