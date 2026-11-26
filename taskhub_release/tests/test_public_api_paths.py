@@ -121,5 +121,48 @@ class PublicApiPathsTests(unittest.TestCase):
                 self.assertEqual(response.json()["path"], path.split("?")[0])
 
 
+    def test_dispute_list_uses_only_current_executor_after_reassignment(self):
+        self.migrate()
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO users(telegram_id,username,first_name,role) VALUES(?,?,?,?)",
+                (102, "old_executor", "Старый исполнитель", "helper"),
+            )
+            old_executor = conn.execute(
+                "SELECT id FROM users WHERE telegram_id=102"
+            ).fetchone()["id"]
+            conn.execute(
+                "INSERT INTO users(telegram_id,username,first_name,role) VALUES(?,?,?,?)",
+                (103, "current_executor", "Текущий исполнитель", "helper"),
+            )
+            current_executor = conn.execute(
+                "SELECT id FROM users WHERE telegram_id=103"
+            ).fetchone()["id"]
+            cur = conn.execute(
+                """INSERT INTO tasks(title,created_by,author_id,room_id,status)
+                   VALUES('Тестовая сделка',?,?,NULL,'disputed')""",
+                (self.account["id"], self.account["id"]),
+            )
+            task_id = cur.lastrowid
+            conn.execute(
+                "INSERT INTO responses(task_id,executor_id,status) VALUES(?,?,'withdrawn')",
+                (task_id, old_executor),
+            )
+            conn.execute(
+                "INSERT INTO responses(task_id,executor_id,status) VALUES(?,?,'accepted')",
+                (task_id, current_executor),
+            )
+            conn.execute(
+                "INSERT INTO disputes(task_id,user_id,reason,status) VALUES(?,?,?,'open')",
+                (task_id, self.account["id"], "Проверка повторного назначения"),
+            )
+
+        response = self.client.get("/api/moderation/disputes", headers=self.headers())
+        self.assertEqual(response.status_code, 200, response.text)
+        rows = [row for row in response.json() if row["title"] == "Тестовая сделка"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["executor_name"], "Текущий исполнитель")
+
+
 if __name__ == "__main__":
     unittest.main()
