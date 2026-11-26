@@ -1930,7 +1930,12 @@ def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-T
             opener.first_name opened_by_name,customer.first_name customer_name,executor.first_name executor_name
             FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users opener ON opener.id=d.user_id
             JOIN users customer ON customer.id=t.created_by
-            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN responses r ON r.id=(
+                SELECT candidate.id FROM responses candidate
+                WHERE candidate.task_id=t.id AND candidate.status IN ('accepted','withdrawn')
+                ORDER BY CASE candidate.status WHEN 'accepted' THEN 0 ELSE 1 END,
+                         candidate.id DESC LIMIT 1
+            )
             LEFT JOIN users executor ON executor.id=r.executor_id
             WHERE d.status='open' ORDER BY d.created_at""").fetchall()
     return [dict(x) for x in rows]
@@ -1943,7 +1948,12 @@ async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_t
         row=conn.execute("""SELECT d.*,t.title,t.status task_status,t.created_by,
             owner.telegram_id owner_telegram_id,r.executor_id,executor.telegram_id executor_telegram_id
             FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users owner ON owner.id=t.created_by
-            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN responses r ON r.id=(
+                SELECT candidate.id FROM responses candidate
+                WHERE candidate.task_id=t.id AND candidate.status IN ('accepted','withdrawn')
+                ORDER BY CASE candidate.status WHEN 'accepted' THEN 0 ELSE 1 END,
+                         candidate.id DESC LIMIT 1
+            )
             LEFT JOIN users executor ON executor.id=r.executor_id
             WHERE d.id=? AND d.status='open'""",(dispute_id,)).fetchone()
         if not row: raise HTTPException(404,"Открытая жалоба не найдена")
