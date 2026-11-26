@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import mimetypes
+import json
+import urllib.parse
+import urllib.request
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -357,6 +359,11 @@ class OnboardingUpdateIn(BaseModel):
     role_flags: str | None = Field(default=None, pattern="^(customer|executor|both)$")
     completed: bool | None = None
     skipped: bool | None = None
+
+
+class DeliveryQuoteIn(BaseModel):
+    start_lat: float = Field(ge=-90, le=90)
+    start_lon: float = Field(ge=-180, le=180)
 
 
 class TaskAttachmentIn(BaseModel):
@@ -1621,6 +1628,83 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
             (account["id"], account["id"]),
         ).fetchall()
     return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "achievements": achievements, "tasks": [dict(r) for r in mine]}
+
+
+def _provider_json(url: str, user_agent: str = "TaskHub/1.0 contact: support@taskhub.app"):
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    with urllib.request.urlopen(request, timeout=8) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def _geocode_delivery_address(city: str, address: str):
+    query = urllib.parse.urlencode({"q": f"{address}, {city}", "format": "jsonv2", "limit": 1})
+    rows = _provider_json("https://nominatim.openstreetmap.org/search?" + query)
+    if not rows:
+        raise HTTPException(422, f"Не удалось найти адрес: {address}")
+    return float(rows[0]["lon"]), float(rows[0]["lat"])
+
+
+def _delivery_weather(lat: float, lon: float):
+    query = urllib.parse.urlencode({
+        "latitude": lat, "longitude": lon,
+        "current": "temperature_2m,precipitation,rain,snowfall,weather_code",
+        "timezone": "auto",
+    })
+    payload = _provider_json("https://api.open-meteo.com/v1/forecast?" + query)
+    current = payload.get("current") or {}
+    code = int(current.get("weather_code", 0))
+    temp = float(current.get("temperature_2m", 10))
+    rain = float(current.get("rain", 0) or 0)
+    snow = float(current.get("snowfall", 0) or 0)
+    if code in (56, 57, 66, 67):
+        return "ice"
+    if temp <= -15:
+        return "strong_frost"
+    if code in (71, 73, 75, 77, 85, 86) or snow > 0:
+        return "snow"
+    if code in (65, 82) or rain >= 7.5:
+        return "heavy_rain"
+    if code in (51, 53, 55, 61, 63, 80, 81) or rain > 0:
+        return "rain"
+    return "clear"
+
+
+@app.post("/api/market/tasks/{task_id}/delivery-quote")
+def calculate_market_delivery_quote(task_id: int, data: DeliveryQuoteIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        task = conn.execute("""SELECT t.*,r.executor_id FROM tasks t
+            JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE t.id=? AND t.room_id IS NULL""", (task_id,)).fetchone()
+        if not task or int(task["executor_id"]) != int(account["id"]) or task["status"] != "in_progress":
+            raise HTTPException(403, "Расчёт маршрута доступен выбранному исполнителю")
+        if task["task_mode"] != "irl" or not task["pickup_address"] or not task["delivery_address"]:
+            raise HTTPException(409, "Для доставки нужны адрес забора и адрес назначения")
+        if task["delivery_courier_pay_kop"] is not None:
+            return {"distance_km": task["delivery_distance_km"], "weather": task["delivery_weather"],
+                    "weather_factor": task["delivery_weather_factor"], "courier_pay_rub": round(task["delivery_courier_pay_kop"] / 100),
+                    "locked": True}
+        city = task["city"]
+        pickup_lon, pickup_lat = _geocode_delivery_address(city, task["pickup_address"])
+        delivery_lon, delivery_lat = _geocode_delivery_address(city, task["delivery_address"])
+        coordinates = f"{data.start_lon},{data.start_lat};{pickup_lon},{pickup_lat};{delivery_lon},{delivery_lat}"
+        route = _provider_json("https://router.project-osrm.org/route/v1/driving/" + coordinates + "?overview=false&steps=false")
+        routes = route.get("routes") or []
+        if not routes:
+            raise HTTPException(422, "Не удалось построить автомобильный маршрут")
+        distance_km = float(routes[0]["distance"]) / 1000
+        weather = _delivery_weather((data.start_lat + pickup_lat + delivery_lat) / 3, (data.start_lon + pickup_lon + delivery_lon) / 3)
+        from .delivery_pricing import calculate_delivery_quote
+        quote = calculate_delivery_quote(distance_km, weather)
+        pay_kop = quote.total_rub * 100
+        conn.execute("""UPDATE tasks SET pickup_lat=?,pickup_lon=?,delivery_lat=?,delivery_lon=?,
+            delivery_distance_km=?,delivery_weather=?,delivery_weather_factor=?,delivery_courier_pay_kop=?,
+            updated_at=CURRENT_TIMESTAMP WHERE id=? AND delivery_courier_pay_kop IS NULL""",
+            (pickup_lat, pickup_lon, delivery_lat, delivery_lon, quote.distance_km, weather,
+             quote.weather_factor, pay_kop, task_id))
+        return {"distance_km": quote.distance_km, "weather": weather, "weather_factor": quote.weather_factor,
+                "base_rub": quote.base_rub, "distance_rub": quote.distance_rub,
+                "courier_pay_rub": quote.total_rub, "locked": True}
 
 
 @app.post("/api/market/tasks/{task_id}/attachments")
