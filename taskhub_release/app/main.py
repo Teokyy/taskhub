@@ -182,42 +182,49 @@ app = FastAPI(title="TaskHub", lifespan=lifespan)
 app.include_router(room_task_actions_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
+# Public APIs are independent of a room; legacy global APIs are retired after migration.
+PUBLIC_API_PATHS = frozenset({
+    "/api/me", "/api/health", "/api/session", "/api/presence", "/api/onboarding",
+    "/api/categories", "/api/category-requests", "/api/moderation/disputes",
+    "/api/market/profile", "/api/market/tasks", "/api/market/ledger",
+})
+PUBLIC_API_PREFIXES = (
+    "/api/rooms/", "/api/market/", "/api/onboarding/", "/api/categories/",
+    "/api/category-requests/", "/api/moderation/disputes/",
+)
+
+
+def is_public_api_path(path: str) -> bool:
+    return (
+        path in PUBLIC_API_PATHS
+        or path == "/api/rooms"
+        or path.startswith(PUBLIC_API_PREFIXES)
+    )
+
+
+def rooms_schema_migrated() -> bool:
+    try:
+        with connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rooms'"
+            ).fetchone() is not None
+    except Exception:
+        return False
+
+
 @app.middleware("http")
 async def block_legacy_global_api(request, call_next):
-    """Keep room data scoped while allowing the independent public marketplace API."""
+    """Reject retired global endpoints without blocking room or marketplace APIs."""
     path = request.url.path.rstrip("/") or "/"
-    # Category catalogue is a global marketplace resource. Bypass the legacy
-    # room API guard explicitly before evaluating any legacy-route rules.
-    # Keep the raw path in logs so proxy/path-normalization issues are visible.
-    if path == "/api/categories" or path.startswith("/api/categories/"):
-        log.info(
-            "CATEGORY_API_BYPASS method=%s path=%s raw_path=%r",
-            request.method, path, request.scope.get("raw_path"),
+    if path.startswith("/api/") and not is_public_api_path(path) and rooms_schema_migrated():
+        log.warning("LEGACY_API_BLOCKED method=%s path=%s", request.method, path)
+        return JSONResponse(
+            status_code=410,
+            content={
+                "detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи.",
+                "path": path,
+            },
         )
-        return await call_next(request)
-    allowed = {
-        "/api/me", "/api/health", "/api/session", "/api/onboarding", "/api/categories",
-        "/api/presence", "/api/market/profile", "/api/market/tasks", "/api/market/ledger",
-    }
-    # Onboarding and category endpoints are global account preferences, not legacy room data.
-    if path.startswith((
-        "/api/onboarding/", "/api/categories/", "/api/category-requests/",
-        "/api/market/tasks/", "/api/moderation/disputes/",
-    )):
-        allowed.add(path)
-    if path in ("/api/category-requests", "/api/moderation/disputes"):
-        allowed.add(path)
-    if path.startswith("/api/") and path not in allowed and not path.startswith(("/api/rooms", "/api/market/")):
-        try:
-            with connect() as conn:
-                migrated = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rooms'"
-                ).fetchone() is not None
-        except Exception:
-            migrated = False
-        if migrated:
-            log.warning("LEGACY_API_BLOCKED method=%s path=%s", request.method, path)
-            return JSONResponse(status_code=410, content={"detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи.", "path": path})
     response = await call_next(request)
     # Telegram WebViews can retain an old Mini App bundle across deployments.
     # Always revalidate the entry point and application bundle so frontend API
@@ -1923,7 +1930,12 @@ def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-T
             opener.first_name opened_by_name,customer.first_name customer_name,executor.first_name executor_name
             FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users opener ON opener.id=d.user_id
             JOIN users customer ON customer.id=t.created_by
-            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN responses r ON r.id=(
+                SELECT candidate.id FROM responses candidate
+                WHERE candidate.task_id=t.id AND candidate.status IN ('accepted','withdrawn')
+                ORDER BY CASE candidate.status WHEN 'accepted' THEN 0 ELSE 1 END,
+                         candidate.id DESC LIMIT 1
+            )
             LEFT JOIN users executor ON executor.id=r.executor_id
             WHERE d.status='open' ORDER BY d.created_at""").fetchall()
     return [dict(x) for x in rows]
@@ -1936,7 +1948,12 @@ async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_t
         row=conn.execute("""SELECT d.*,t.title,t.status task_status,t.created_by,
             owner.telegram_id owner_telegram_id,r.executor_id,executor.telegram_id executor_telegram_id
             FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users owner ON owner.id=t.created_by
-            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN responses r ON r.id=(
+                SELECT candidate.id FROM responses candidate
+                WHERE candidate.task_id=t.id AND candidate.status IN ('accepted','withdrawn')
+                ORDER BY CASE candidate.status WHEN 'accepted' THEN 0 ELSE 1 END,
+                         candidate.id DESC LIMIT 1
+            )
             LEFT JOIN users executor ON executor.id=r.executor_id
             WHERE d.id=? AND d.status='open'""",(dispute_id,)).fetchone()
         if not row: raise HTTPException(404,"Открытая жалоба не найдена")
