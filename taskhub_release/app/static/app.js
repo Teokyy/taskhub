@@ -96,6 +96,56 @@ function startPresenceHeartbeat(){
  const ping=()=>api('/presence',{method:'POST'}).catch(()=>{});
  ping();setInterval(ping,60000);
 }
+
+let onboardingState={role:'both',categories:[],tree:[],step:1};
+function closeOnboarding(){document.querySelector('#onboarding-modal')?.remove()}
+function renderOnboardingStep(){
+ const host=document.querySelector('#onboarding-content');if(!host)return;
+ const roleLabels={customer:'Заказчик',executor:'Исполнитель',both:'И то, и другое'};
+ let body='';
+ if(onboardingState.step===1){
+  body='<div class="eyebrow">ШАГ 1 ИЗ 3</div><h2 style="margin:6px 0 8px">Как ты планируешь пользоваться TaskHub?</h2><p class="muted">Это поможет настроить стартовые разделы. Роль можно будет изменить позже.</p>'+
+  ['customer','executor','both'].map(k=>'<button type="button" class="panel block" data-onboard-role="'+k+'" style="text-align:left;border-color:'+(onboardingState.role===k?'var(--lime)':'var(--line)')+';background:'+(onboardingState.role===k?'#263a25':'var(--panel)')+';color:var(--text);margin:9px 0"><b>'+(k==='customer'?'🧾 Ищу исполнителей':k==='executor'?'💼 Ищу задания и подработку':'🔁 И то, и другое')+'</b><div class="muted" style="font-size:12px;margin-top:4px">'+(k==='customer'?'Буду публиковать задачи и выбирать исполнителей':k==='executor'?'Буду находить задания и откликаться':'Хочу и размещать задачи, и брать чужие')+'</div></button>').join('')+
+  '<button class="btn block" id="onboard-next">Продолжить</button>';
+ }else if(onboardingState.step===2){
+  const selected=new Set(onboardingState.categories);
+  body='<div class="eyebrow">ШАГ 2 ИЗ 3</div><h2 style="margin:6px 0 8px">Какие задания тебе интересны?</h2><p class="muted">Выбери направления, чтобы получать уведомления о новых заданиях. Можно пропустить этот шаг. Не больше 20 категорий.</p><div class="muted" id="onboard-count">'+selected.size+' / 20 выбрано</div>'+
+  onboardingState.tree.map(p=>'<section class="panel" style="margin:9px 0"><label style="display:flex;gap:10px;align-items:center;color:var(--text);font-weight:800"><input type="checkbox" data-onboard-category value="'+p.id+'" '+(selected.has(Number(p.id))?'checked':'')+'> '+esc(p.name)+'</label><div style="padding-left:22px">'+p.children.map(c=>'<label style="display:flex;gap:9px;align-items:center;padding:5px 0"><input type="checkbox" data-onboard-category value="'+c.id+'" '+(selected.has(Number(c.id))?'checked':'')+'> '+esc(c.name)+'</label>').join('')+'</div></section>').join('')+
+  '<div class="actions"><button class="btn secondary" id="onboard-back">Назад</button><button class="btn" id="onboard-next" style="flex:1">Сохранить и продолжить</button></div>';
+ }else{
+  body='<div class="eyebrow">ШАГ 3 ИЗ 3</div><h2 style="margin:6px 0 8px">Всё готово!</h2><p class="muted">Ты выбрал режим: <b>'+roleLabels[onboardingState.role]+'</b>.</p><section class="panel"><b>Что дальше?</b><p class="muted" style="margin:7px 0 0">'+(onboardingState.role==='customer'?'Размести первое задание на бирже и выбери подходящего исполнителя.':onboardingState.role==='executor'?'Открой биржу, найди подходящее задание и отправь отклик.':'Можешь разместить своё задание или найти работу на общей бирже.')+'</p></section>'+
+  (onboardingState.role!=='executor'?'<button class="btn block" id="onboard-create">➕ Разместить задание</button>':'')+
+  '<button class="btn '+(onboardingState.role==='executor'?'':'secondary')+' block" id="onboard-market" style="margin-top:9px">🔎 Открыть биржу</button><button class="btn ghost block" id="onboard-finish" style="margin-top:5px">Позже</button>';
+ }
+ host.innerHTML=body;
+ host.querySelectorAll('[data-onboard-role]').forEach(b=>b.onclick=()=>{onboardingState.role=b.dataset.onboardRole;renderOnboardingStep()});
+ host.querySelectorAll('[data-onboard-category]').forEach(b=>b.onchange=()=>{const ids=[...host.querySelectorAll('[data-onboard-category]:checked')].map(x=>Number(x.value));if(ids.length>20){b.checked=false;toast('Максимум 20 категорий');return}onboardingState.categories=ids;const count=host.querySelector('#onboard-count');if(count)count.textContent=ids.length+' / 20 выбрано'});
+ host.querySelector('#onboard-back')?.addEventListener('click',()=>{onboardingState.step=1;renderOnboardingStep()});
+ host.querySelector('#onboard-next')?.addEventListener('click',async()=>{
+  try{
+   if(onboardingState.step===1){await api('/onboarding',{method:'PUT',body:JSON.stringify({role_flags:onboardingState.role})});onboardingState.step=2;renderOnboardingStep();return}
+   await api('/market/subscriptions',{method:'PUT',body:JSON.stringify({category_ids:onboardingState.categories})});
+   onboardingState.step=3;renderOnboardingStep();
+  }catch(e){toast(e.message)}
+ });
+ const finish=async()=>{try{await api('/onboarding',{method:'PUT',body:JSON.stringify({completed:true})});closeOnboarding();toast('Настройка TaskHub завершена')}catch(e){toast(e.message)}};
+ host.querySelector('#onboard-finish')?.addEventListener('click',finish);
+ host.querySelector('#onboard-market')?.addEventListener('click',async()=>{await finish();setTab('exchange')});
+ host.querySelector('#onboard-create')?.addEventListener('click',async()=>{await finish();setTab('exchange');setTimeout(()=>createForm('market'),0)});
+}
+async function openOnboarding(force=false){
+ try{
+  const [status,tree,subscriptions]=await Promise.all([api('/onboarding'),api('/categories'),api('/market/subscriptions')]);
+  if(!force&&(status.completed||status.skipped))return;
+  onboardingState={role:['customer','executor','both'].includes(status.role_flags)?status.role_flags:'both',categories:subscriptions.map(x=>Number(x.id)),tree,step:1};
+  document.querySelector('#onboarding-modal')?.remove();
+  document.body.insertAdjacentHTML('beforeend','<div class="modal-backdrop" id="onboarding-modal"><section class="modal-sheet" style="max-width:500px"><div class="modal-head"><div><div class="eyebrow">ЗНАКОМСТВО С TASKHUB</div><div class="muted" style="font-size:12px">Короткая настройка · около 2 минут</div></div><button class="modal-close" id="onboard-close" aria-label="Закрыть">×</button></div><div id="onboarding-content" style="margin-top:16px"></div><button class="btn ghost block" id="onboard-skip" style="margin-top:8px">Пропустить настройку</button></section></div>');
+  document.querySelector('#onboard-close').onclick=closeOnboarding;
+  document.querySelector('#onboard-skip').onclick=async()=>{try{await api('/onboarding',{method:'PUT',body:JSON.stringify({skipped:true})});closeOnboarding()}catch(e){toast(e.message)}};
+  renderOnboardingStep();
+ }catch(e){toast('Не удалось открыть знакомство с TaskHub: '+e.message)}
+}
+
 async function boot(){
  try{
   me=await api('/me');
@@ -107,6 +157,7 @@ async function boot(){
   startPresenceHeartbeat();
   await render();
   if(startupParams.get('action')==='create'&&tab==='exchange')createForm('market');
+  else await openOnboarding(false);
  }catch(e){
   const web=window.Telegram?.WebApp,data=web?.initData||'';
   const reason=!web?'Telegram WebApp не обнаружен.':!data?'Telegram не передал initData. Открой Mini App через кнопку бота.':'Сервер не принял запрос. Возможно, миграция комнат ещё не включена.';
@@ -222,10 +273,11 @@ async function render(){
   me=profile;const mine=(profile.tasks||[]).filter(t=>t.room_id===null||t.room_id===undefined);
   const counts={open:0,in_progress:0,done:0,disputed:0,...(profile.counts||{})};
   const customerTasks=mine.filter(t=>Number(t.created_by)===Number(me.user.id));
-  view.innerHTML='<section class="profile-row" style="margin:8px 2px 18px"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div style="min-width:0;flex:1"><div class="profile-name">'+esc(me.user.first_name||'Участник')+'</div><div class="muted">Участник TaskHub</div><div class="muted" style="font-size:12px;margin-top:3px">★ '+Number(profile.rating_average||0).toFixed(1)+' · '+(profile.review_count||0)+' отзывов</div><div class="muted" style="font-size:12px;margin-top:5px">'+(profile.achievements||[]).map(a=>a.code==='first_quest'?'🏆 Первый квест':a.code==='first_task'?'✍️ Первое задание':a.code==='first_response'?'⚡ Первый отклик':a.code).join(' · ')+'</div></div></section><section class="panel"><b>Оплата напрямую</b><p class="muted" style="margin:6px 0 0">Заказчик и исполнитель рассчитываются самостоятельно. TaskHub фиксирует ход сделки, но не хранит деньги и не проводит выплаты.</p></section><div class="section-head"><h2>Мои сделки</h2><span>'+mine.length+' ВСЕГО</span></div><div class="stats"><div class="stat"><small>В работе</small><strong>'+counts.in_progress+'</strong></div><div class="stat"><small>Завершено</small><strong>'+counts.done+'</strong></div><div class="stat"><small>Открытые</small><strong>'+customerTasks.filter(t=>['open','available'].includes(t.status)).length+'</strong></div><div class="stat"><small>Споры</small><strong>'+counts.disputed+'</strong></div></div><div class="section-head"><h2>Мои задания как заказчика</h2><span>'+customerTasks.length+'</span></div><div id="my-market-tasks">'+(customerTasks.length?customerTasks.map(t=>taskCard(t)).join(''):empty('Ты ещё не размещал задания','Опубликуй первое задание на общей бирже.'))+'</div><div class="section-head"><h2>Мой аккаунт</h2></div><div id="profile-actions" class="panel" style="display:grid;gap:9px"><button class="btn secondary block" id="my-responses">Мои отклики</button><button class="btn secondary block" id="my-chats">Мои диалоги</button><button class="btn secondary block" id="my-subscriptions">Подписки на категории</button>'+(['admin','moderator'].includes(me.user.role)?'<button class="btn secondary block" id="market-moderation">Модерация биржи</button>':'')+'</div><div id="profile-theme"></div>';
+  view.innerHTML='<section class="profile-row" style="margin:8px 2px 18px"><div class="big-avatar">'+esc((me.user.first_name||'T').slice(0,1).toUpperCase())+'</div><div style="min-width:0;flex:1"><div class="profile-name">'+esc(me.user.first_name||'Участник')+'</div><div class="muted">Участник TaskHub</div><div class="muted" style="font-size:12px;margin-top:3px">★ '+Number(profile.rating_average||0).toFixed(1)+' · '+(profile.review_count||0)+' отзывов</div><div class="muted" style="font-size:12px;margin-top:5px">'+(profile.achievements||[]).map(a=>a.code==='first_quest'?'🏆 Первый квест':a.code==='first_task'?'✍️ Первое задание':a.code==='first_response'?'⚡ Первый отклик':a.code).join(' · ')+'</div></div></section><section class="panel"><b>Оплата напрямую</b><p class="muted" style="margin:6px 0 0">Заказчик и исполнитель рассчитываются самостоятельно. TaskHub фиксирует ход сделки, но не хранит деньги и не проводит выплаты.</p></section><div class="section-head"><h2>Мои сделки</h2><span>'+mine.length+' ВСЕГО</span></div><div class="stats"><div class="stat"><small>В работе</small><strong>'+counts.in_progress+'</strong></div><div class="stat"><small>Завершено</small><strong>'+counts.done+'</strong></div><div class="stat"><small>Открытые</small><strong>'+customerTasks.filter(t=>['open','available'].includes(t.status)).length+'</strong></div><div class="stat"><small>Споры</small><strong>'+counts.disputed+'</strong></div></div><div class="section-head"><h2>Мои задания как заказчика</h2><span>'+customerTasks.length+'</span></div><div id="my-market-tasks">'+(customerTasks.length?customerTasks.map(t=>taskCard(t)).join(''):empty('Ты ещё не размещал задания','Опубликуй первое задание на общей бирже.'))+'</div><div class="section-head"><h2>Мой аккаунт</h2></div><div id="profile-actions" class="panel" style="display:grid;gap:9px"><button class="btn secondary block" id="my-responses">Мои отклики</button><button class="btn secondary block" id="my-chats">Мои диалоги</button><button class="btn secondary block" id="my-subscriptions">Подписки на категории</button><button class="btn secondary block" id="profile-onboarding">Квест знакомства с TaskHub</button>'+(['admin','moderator'].includes(me.user.role)?'<button class="btn secondary block" id="market-moderation">Модерация биржи</button>':'')+'</div><div id="profile-theme"></div>';
   document.querySelector('#my-responses').onclick=showMyMarketResponses;
   document.querySelector('#my-chats').onclick=showMarketChats;
   document.querySelector('#my-subscriptions').onclick=showMarketNotificationSettings;
+  document.querySelector('#profile-onboarding').onclick=()=>openOnboarding(true);
   document.querySelector('#market-moderation')?.addEventListener('click',showMarketplaceModeration);
   document.querySelector('#profile-theme').innerHTML=renderThemeSettings();
   document.querySelector('#profile-theme').querySelectorAll('[data-theme-choice]').forEach(b=>b.onclick=()=>applyTaskhubTheme(b.dataset.themeChoice));
