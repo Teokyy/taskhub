@@ -1630,7 +1630,7 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
     return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "achievements": achievements, "tasks": [dict(r) for r in mine]}
 
 
-def _provider_json(url: str, user_agent: str = "TaskHub/1.0 contact: support@taskhub.app"):
+def _provider_json(url: str, user_agent: str = "TaskHub/1.0 (https://taskhub-production-87811e29.up.railway.app)"):
     request = urllib.request.Request(url, headers={"User-Agent": user_agent})
     try:
         with urllib.request.urlopen(request, timeout=8) as response:
