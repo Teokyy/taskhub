@@ -247,6 +247,21 @@ class RoomApiIntegrationTests(unittest.TestCase):
         self.assertEqual(denied.status_code, 409)
 
 
+    def test_marketplace_and_onboarding_routes_survive_legacy_api_guard(self):
+        owner = self.headers("owner-token")
+        checks = [
+            ("/api/market/profile", 200),
+            ("/api/market/tasks?limit=5&offset=0", 200),
+            ("/api/categories", 200),
+            ("/api/onboarding", 200),
+            ("/api/market/subscriptions", 200),
+        ]
+        for path, expected_status in checks:
+            with self.subTest(path=path):
+                response = self.client.get(path, headers=owner)
+                self.assertEqual(response.status_code, expected_status, response.text)
+                self.assertNotIn("Этот адрес относится к старому API", response.text)
+
     def test_cross_room_and_legacy_api_are_blocked(self):
         owner = self.headers("owner-token")
         worker = self.headers("worker-token")
