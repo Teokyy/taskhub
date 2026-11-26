@@ -1663,10 +1663,10 @@ def upload_market_task_attachment(task_id: int, data: TaskAttachmentIn, x_telegr
 def list_market_task_attachments(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
     with connect() as conn:
-        task = conn.execute("""SELECT t.created_by,r.executor_id FROM tasks t
+        task = conn.execute("""SELECT t.created_by,t.status,r.executor_id FROM tasks t
             LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
             WHERE t.id=? AND t.room_id IS NULL""", (task_id,)).fetchone()
-        if not task or int(account["id"]) not in (int(task["created_by"]), int(task["executor_id"] or -1)):
+        if not task or (int(account["id"]) not in (int(task["created_by"]), int(task["executor_id"] or -1)) and task["status"] not in ("open", "available")):
             raise HTTPException(404, "Вложения не найдены")
         rows = conn.execute("SELECT id,mime_type,file_size FROM task_attachments WHERE task_id=? ORDER BY id", (task_id,)).fetchall()
         return [{"id": row["id"], "mime_type": row["mime_type"], "file_size": row["file_size"],
