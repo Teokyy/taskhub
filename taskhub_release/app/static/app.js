@@ -4,7 +4,7 @@ const initData=tg?.initData||'';
 const headers={'Content-Type':'application/json','X-Telegram-Init-Data':initData};
 const view=document.querySelector('#view');
 const startupParams=new URLSearchParams(window.location.search);
-let me=null,tab=['exchange','profile','chats'].includes(startupParams.get('tab'))?startupParams.get('tab'):'exchange',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
+let me=null,tab=['room','exchange','profile','chats'].includes(startupParams.get('tab'))?startupParams.get('tab'):'exchange',toastTimer,rooms=[],activeRoom=null,roomBudget=null,renderSequence=0;
 const rub=n=>(n/100).toLocaleString('ru-RU',{maximumFractionDigits:2})+' ₽';
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isAdmin=()=>['owner','admin'].includes(activeRoom?.room_role);
@@ -101,6 +101,8 @@ async function boot(){
   me=await api('/me');
   document.querySelector('#avatar').innerHTML=me.user.photo_url?'<img src="'+esc(me.user.photo_url)+'" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:14px">':esc((me.user.first_name||'T').slice(0,1).toUpperCase());
   activeRoom=null;rooms=[];
+  await loadRooms();
+  renderRoomSelector();
   await refreshMe();
   startPresenceHeartbeat();
   await render();
