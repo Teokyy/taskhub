@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
+import urllib.parse
+import urllib.request
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -278,6 +282,19 @@ class StageIn(BaseModel):
 
 
 class TaskIn(BaseModel):
+    task_mode: str = Field(default="online", pattern="^(online|irl)$")
+    city: str = Field(default="", max_length=120)
+    pickup_address: str = Field(default="", max_length=500)
+    delivery_address: str = Field(default="", max_length=500)
+    pickup_lat: float | None = Field(default=None, ge=-90, le=90)
+    pickup_lon: float | None = Field(default=None, ge=-180, le=180)
+    delivery_lat: float | None = Field(default=None, ge=-90, le=90)
+    delivery_lon: float | None = Field(default=None, ge=-180, le=180)
+    parcel_weight_kg: float | None = Field(default=None, gt=0, le=200)
+    parcel_length_cm: float | None = Field(default=None, gt=0, le=500)
+    parcel_width_cm: float | None = Field(default=None, gt=0, le=500)
+    parcel_height_cm: float | None = Field(default=None, gt=0, le=500)
+    parcel_count: int = Field(default=1, ge=1, le=50)
     title: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=10000)
     category: str = Field(default="Другое", min_length=1, max_length=120)
@@ -296,6 +313,10 @@ class TaskIn(BaseModel):
 
     @model_validator(mode="after")
     def validate_pricing(self):
+        if self.task_mode == "irl" and not self.city.strip():
+            raise ValueError("Для задания IRL укажи город")
+        if self.task_mode == "online" and any((self.pickup_address, self.delivery_address)):
+            raise ValueError("Адреса доставки доступны только для IRL-заданий")
         if self.pricing_model not in {"fixed", "normative"}:
             raise ValueError("Модель оплаты: fixed или normative")
         if self.difficulty not in DIFFICULTY_FACTORS:
@@ -339,6 +360,27 @@ class OnboardingUpdateIn(BaseModel):
     role_flags: str | None = Field(default=None, pattern="^(customer|executor|both)$")
     completed: bool | None = None
     skipped: bool | None = None
+
+
+class DeliveryQuoteIn(BaseModel):
+    start_lat: float = Field(ge=-90, le=90)
+    start_lon: float = Field(ge=-180, le=180)
+
+
+class TaskAttachmentIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=180)
+    mime_type: str = Field(pattern="^(image/jpeg|image/png|image/webp)$")
+    data_base64: str = Field(min_length=1, max_length=14_000_000)
+
+
+class CourierProfileIn(BaseModel):
+    city: str = Field(min_length=2, max_length=120)
+    transport: str = Field(default="walk", pattern="^(walk|bicycle|car|motorcycle)$")
+    max_weight_kg: float = Field(default=5, gt=0, le=200)
+    max_length_cm: float = Field(default=40, gt=0, le=500)
+    max_width_cm: float = Field(default=30, gt=0, le=500)
+    max_height_cm: float = Field(default=30, gt=0, le=500)
+    max_items: int = Field(default=1, ge=1, le=50)
 
 
 class MarketResponseIn(BaseModel):
@@ -1589,6 +1631,195 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
     return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "achievements": achievements, "tasks": [dict(r) for r in mine]}
 
 
+def _provider_json(url: str, user_agent: str = "TaskHub/1.0 (https://taskhub-production-87811e29.up.railway.app)"):
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except Exception as exc:
+        log.warning("Delivery provider request failed: %s", type(exc).__name__)
+        raise HTTPException(503, "Сервис маршрутов или погоды временно недоступен")
+
+
+def _geocode_delivery_address(city: str, address: str):
+    query = urllib.parse.urlencode({"q": f"{address}, {city}", "format": "jsonv2", "limit": 1})
+    rows = _provider_json("https://nominatim.openstreetmap.org/search?" + query)
+    if not rows:
+        raise HTTPException(422, f"Не удалось найти адрес: {address}")
+    return float(rows[0]["lon"]), float(rows[0]["lat"])
+
+
+def _delivery_weather(lat: float, lon: float, route_duration_seconds: float = 0):
+    query = urllib.parse.urlencode({
+        "latitude": lat, "longitude": lon,
+        "current": "temperature_2m",
+        "hourly": "temperature_2m,precipitation_probability,rain,snowfall,weather_code",
+        "forecast_days": 2, "timezone": "auto",
+    })
+    payload = _provider_json("https://api.open-meteo.com/v1/forecast?" + query)
+    hourly = payload.get("hourly") or {}
+    times = hourly.get("time") or []
+    if not times:
+        return "clear"
+    current = datetime.fromisoformat((payload.get("current") or {}).get("time", times[0]))
+    target = current + timedelta(seconds=max(0, route_duration_seconds) / 2)
+    index = min(range(len(times)), key=lambda i: abs((datetime.fromisoformat(times[i]) - target).total_seconds()))
+    code = int((hourly.get("weather_code") or [0])[index] or 0)
+    temp = float((hourly.get("temperature_2m") or [10])[index] or 10)
+    rain = float((hourly.get("rain") or [0])[index] or 0)
+    snow = float((hourly.get("snowfall") or [0])[index] or 0)
+    probability = int((hourly.get("precipitation_probability") or [0])[index] or 0)
+    if code in (56, 57, 66, 67):
+        return "ice"
+    if code in (71, 73, 75, 77, 85, 86) or snow > 0:
+        return "snow"
+    if code in (65, 82) or rain >= 7.5 or probability >= 80 and rain > 0:
+        return "heavy_rain"
+    if temp <= -15:
+        return "strong_frost"
+    if code in (51, 53, 55, 61, 63, 80, 81) or rain > 0:
+        return "rain"
+    return "clear"
+
+
+@app.post("/api/market/tasks/{task_id}/delivery-quote")
+def calculate_market_delivery_quote(task_id: int, data: DeliveryQuoteIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        task = conn.execute("""SELECT t.*,r.executor_id FROM tasks t
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE t.id=? AND t.room_id IS NULL""", (task_id,)).fetchone()
+        if not task or task["status"] not in ("open", "available", "in_progress"):
+            raise HTTPException(403, "Расчёт маршрута недоступен для этого задания")
+        if task["status"] == "in_progress" and int(task["executor_id"] or -1) != int(account["id"]):
+            raise HTTPException(403, "Пересчитать тариф может только выбранный исполнитель")
+        if task["task_mode"] != "irl" or not task["pickup_address"] or not task["delivery_address"]:
+            raise HTTPException(409, "Для доставки нужны адрес забора и адрес назначения")
+        if task["status"] == "in_progress" and task["delivery_courier_pay_kop"] is not None:
+            return {"distance_km": task["delivery_distance_km"], "weather": task["delivery_weather"],
+                    "weather_factor": task["delivery_weather_factor"], "courier_pay_rub": round(task["delivery_courier_pay_kop"] / 100),
+                    "locked": True}
+        city = task["city"]
+        pickup_lon, pickup_lat = _geocode_delivery_address(city, task["pickup_address"])
+        delivery_lon, delivery_lat = _geocode_delivery_address(city, task["delivery_address"])
+        coordinates = f"{data.start_lon},{data.start_lat};{pickup_lon},{pickup_lat};{delivery_lon},{delivery_lat}"
+        route = _provider_json("https://router.project-osrm.org/route/v1/driving/" + coordinates + "?overview=false&steps=false")
+        routes = route.get("routes") or []
+        if not routes:
+            raise HTTPException(422, "Не удалось построить автомобильный маршрут")
+        distance_km = float(routes[0]["distance"]) / 1000
+        weather = _delivery_weather((data.start_lat + pickup_lat + delivery_lat) / 3, (data.start_lon + pickup_lon + delivery_lon) / 3, float(routes[0].get('duration') or 0))
+        from .delivery_pricing import calculate_delivery_quote
+        quote = calculate_delivery_quote(distance_km, weather)
+        pay_kop = quote.total_rub * 100
+        if task["status"] == "in_progress":
+            conn.execute("""UPDATE tasks SET pickup_lat=?,pickup_lon=?,delivery_lat=?,delivery_lon=?,
+                delivery_distance_km=?,delivery_weather=?,delivery_weather_factor=?,delivery_courier_pay_kop=?,
+                updated_at=CURRENT_TIMESTAMP WHERE id=? AND delivery_courier_pay_kop IS NULL""",
+                (pickup_lat, pickup_lon, delivery_lat, delivery_lon, quote.distance_km, weather,
+                 quote.weather_factor, pay_kop, task_id))
+        return {"distance_km": quote.distance_km, "weather": weather, "weather_factor": quote.weather_factor,
+                "base_rub": quote.base_rub, "distance_rub": quote.distance_rub,
+                "courier_pay_rub": quote.total_rub, "locked": task["status"] == "in_progress"}
+
+
+@app.post("/api/market/tasks/{task_id}/attachments")
+def upload_market_task_attachment(task_id: int, data: TaskAttachmentIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    try:
+        raw = base64.b64decode(data.data_base64, validate=True)
+    except Exception:
+        raise HTTPException(400, "Некорректный файл изображения")
+    if not raw or len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(413, "Изображение должно быть не больше 10 МБ")
+    signatures = {
+        "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
+        "image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/webp": len(raw) >= 12 and raw.startswith(b"RIFF") and raw[8:12] == b"WEBP",
+    }
+    if not signatures.get(data.mime_type, False):
+        raise HTTPException(415, "Содержимое файла не соответствует формату изображения")
+    with connect() as conn:
+        task = conn.execute("SELECT id,created_by,room_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task or task["room_id"] is not None or int(task["created_by"]) != int(account["id"]):
+            raise HTTPException(404, "Задание не найдено")
+        count = conn.execute("SELECT COUNT(*) n FROM task_attachments WHERE task_id=?", (task_id,)).fetchone()["n"]
+        if count >= 5:
+            raise HTTPException(409, "К одному заданию можно прикрепить не больше 5 фотографий")
+        upload_dir = Path(getenv("TASKHUB_UPLOAD_DIR", "/data/taskhub_uploads"))
+        try:
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            probe = upload_dir / ".write_test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink()
+        except OSError:
+            upload_dir = ROOT / "uploads"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+        extension = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[data.mime_type]
+        filename = secrets.token_hex(16) + extension
+        target = upload_dir / filename
+        target.write_bytes(raw)
+        cur = conn.execute(
+            "INSERT INTO task_attachments(task_id,uploader_id,file_path,mime_type,file_size) VALUES(?,?,?,?,?)",
+            (task_id, account["id"], str(target), data.mime_type, len(raw)),
+        )
+        return {"id": cur.lastrowid, "mime_type": data.mime_type, "file_size": len(raw)}
+
+
+@app.get("/api/market/tasks/{task_id}/attachments")
+def list_market_task_attachments(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        task = conn.execute("""SELECT t.created_by,t.status,r.executor_id FROM tasks t
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE t.id=? AND t.room_id IS NULL""", (task_id,)).fetchone()
+        if not task or (int(account["id"]) not in (int(task["created_by"]), int(task["executor_id"] or -1)) and task["status"] not in ("open", "available")):
+            raise HTTPException(404, "Вложения не найдены")
+        rows = conn.execute("SELECT id,mime_type,file_size FROM task_attachments WHERE task_id=? ORDER BY id", (task_id,)).fetchall()
+        return [{"id": row["id"], "mime_type": row["mime_type"], "file_size": row["file_size"],
+                 "url": f"/api/market/tasks/{task_id}/attachments/{row['id']}"} for row in rows]
+
+
+@app.get("/api/market/tasks/{task_id}/attachments/{attachment_id}")
+def get_market_task_attachment(task_id: int, attachment_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        row = conn.execute("""SELECT a.file_path,a.mime_type,t.created_by,t.status,r.executor_id
+            FROM task_attachments a JOIN tasks t ON t.id=a.task_id
+            LEFT JOIN responses r ON r.task_id=t.id AND r.status='accepted'
+            WHERE a.id=? AND a.task_id=? AND t.room_id IS NULL""", (attachment_id, task_id)).fetchone()
+        if not row or (int(account["id"]) not in (int(row["created_by"]), int(row["executor_id"] or -1)) and row["status"] not in ("open", "available")):
+            raise HTTPException(404, "Фотография не найдена")
+        path = Path(row["file_path"])
+        if not path.is_file():
+            raise HTTPException(404, "Фотография больше недоступна")
+        return FileResponse(path, media_type=row["mime_type"], filename=path.name)
+
+
+@app.get("/api/market/courier-profile")
+def get_courier_profile(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM courier_profiles WHERE user_id=?", (account["id"],)).fetchone()
+    return dict(row) if row else None
+
+
+@app.put("/api/market/courier-profile")
+def save_courier_profile(data: CourierProfileIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        conn.execute("""INSERT INTO courier_profiles(
+            user_id,city,transport,max_weight_kg,max_length_cm,max_width_cm,max_height_cm,max_items)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET city=excluded.city,transport=excluded.transport,
+            max_weight_kg=excluded.max_weight_kg,max_length_cm=excluded.max_length_cm,
+            max_width_cm=excluded.max_width_cm,max_height_cm=excluded.max_height_cm,
+            max_items=excluded.max_items,updated_at=CURRENT_TIMESTAMP""",
+            (account["id"],data.city.strip(),data.transport,data.max_weight_kg,
+             data.max_length_cm,data.max_width_cm,data.max_height_cm,data.max_items))
+        return dict(conn.execute("SELECT * FROM courier_profiles WHERE user_id=?", (account["id"],)).fetchone())
+
+
 @app.get("/api/market/ledger")
 def market_ledger(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
@@ -1651,11 +1882,16 @@ async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(de
         cur = conn.execute(
             """INSERT INTO tasks(title,description,category,category_id,reward_kop,created_by,author_id,deadline,
                pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,budget_reserved_kop,
-               status,moderation_status,room_id)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+               status,moderation_status,room_id,task_mode,city,pickup_address,delivery_address,
+               pickup_lat,pickup_lon,delivery_lat,delivery_lon,parcel_weight_kg,parcel_length_cm,
+               parcel_width_cm,parcel_height_cm,parcel_count)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data.title.strip(), data.description.strip(), category_label, category_id, reward,
              account["id"], account["id"], data.deadline, data.pricing_model, data.norm_minutes,
-             data.difficulty, data.urgency, reward, 0, "open", "approved"),
+             data.difficulty, data.urgency, reward, 0, "open", "approved", data.task_mode,
+             data.city.strip(), data.pickup_address.strip(), data.delivery_address.strip(),
+             data.pickup_lat, data.pickup_lon, data.delivery_lat, data.delivery_lon,
+             data.parcel_weight_kg, data.parcel_length_cm, data.parcel_width_cm, data.parcel_height_cm, data.parcel_count),
         )
         task_id = cur.lastrowid
         conn.execute("INSERT OR IGNORE INTO achievements(user_id,code) VALUES(?,'first_task')",(account["id"],))
@@ -1711,18 +1947,30 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
                 "norm_minutes":task["norm_minutes"] if active_deal else data.norm_minutes,
                 "difficulty":task["difficulty"] if active_deal else data.difficulty,
                 "urgency":task["urgency"] if active_deal else data.urgency,
-                "fixed_reward_kop":task["fixed_reward_kop"] if active_deal else reward}
+                "fixed_reward_kop":task["fixed_reward_kop"] if active_deal else reward,
+                "task_mode":task["task_mode"] if active_deal else data.task_mode,
+                "city":task["city"] if active_deal else data.city.strip(),
+                "pickup_address":task["pickup_address"] if active_deal else data.pickup_address.strip(),
+                "delivery_address":task["delivery_address"] if active_deal else data.delivery_address.strip(),
+                "parcel_weight_kg":task["parcel_weight_kg"] if active_deal else data.parcel_weight_kg,
+                "parcel_length_cm":task["parcel_length_cm"] if active_deal else data.parcel_length_cm,
+                "parcel_width_cm":task["parcel_width_cm"] if active_deal else data.parcel_width_cm,
+                "parcel_height_cm":task["parcel_height_cm"] if active_deal else data.parcel_height_cm,
+                "parcel_count":task["parcel_count"] if active_deal else data.parcel_count}
         for field,new_value in values.items():
             old_value=task[field]
             if str(old_value or "")!=str(new_value or ""):
                 conn.execute("INSERT INTO task_history(task_id,changed_by,field,old_value,new_value) VALUES(?,?,?,?,?)",
                              (task_id,account["id"],field,str(old_value) if old_value is not None else None,str(new_value) if new_value is not None else None))
         conn.execute("""UPDATE tasks SET title=?,description=?,category=?,category_id=?,reward_kop=?,deadline=?,
-            pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,updated_at=CURRENT_TIMESTAMP
+            pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,task_mode=?,city=?,
+            pickup_address=?,delivery_address=?,parcel_weight_kg=?,parcel_length_cm=?,parcel_width_cm=?,
+            parcel_height_cm=?,parcel_count=?,updated_at=CURRENT_TIMESTAMP
             WHERE id=? AND created_by=? AND room_id IS NULL""",
             (values["title"],values["description"],values["category"],values["category_id"],values["reward_kop"],values["deadline"],
              values["pricing_model"],values["norm_minutes"],values["difficulty"],values["urgency"],
-             values["fixed_reward_kop"],task_id,account["id"]))
+             values["fixed_reward_kop"],values["task_mode"],values["city"],values["pickup_address"],values["delivery_address"],
+             values["parcel_weight_kg"],values["parcel_length_cm"],values["parcel_width_cm"],values["parcel_height_cm"],values["parcel_count"],task_id,account["id"]))
         if active_deal:
             notify_executor=task["executor_telegram_id"]
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",

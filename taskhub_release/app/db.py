@@ -346,6 +346,28 @@ def init_db():
         _add_column(conn, "tasks", "author_id INTEGER REFERENCES users(id)")
         _add_column(conn, "tasks", "dispute_status TEXT")
         _add_column(conn, "tasks", "completed_at TEXT")
+        # IRL marketplace and courier delivery fields are additive migrations.
+        for definition in (
+            "task_mode TEXT NOT NULL DEFAULT 'online'",
+            "city TEXT NOT NULL DEFAULT ''",
+            "pickup_address TEXT NOT NULL DEFAULT ''",
+            "delivery_address TEXT NOT NULL DEFAULT ''",
+            "pickup_lat REAL",
+            "pickup_lon REAL",
+            "delivery_lat REAL",
+            "delivery_lon REAL",
+            "parcel_weight_kg REAL",
+            "parcel_length_cm REAL",
+            "parcel_width_cm REAL",
+            "parcel_height_cm REAL",
+            "parcel_count INTEGER NOT NULL DEFAULT 1",
+            "delivery_distance_km REAL",
+            "delivery_weather TEXT",
+            "delivery_weather_factor REAL",
+            "delivery_courier_pay_kop INTEGER",
+        ):
+            _add_column(conn, "tasks", definition)
+
         conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_category_status_created ON tasks(category_id,status,created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_market_tasks_feed ON tasks(room_id,status,id DESC)")
 
@@ -360,6 +382,8 @@ def init_db():
             "Видео и аудио": ["Видеомонтаж", "Озвучка", "Motion-дизайн", "Подкасты"],
             "Образование и репетиторство": ["Языки", "Школьные предметы", "Программирование", "Подготовка к экзаменам"],
             "Бизнес и финансы": ["Бухгалтерия", "Юридическая помощь", "Бизнес-планы", "Консультации"],
+            "Бытовые услуги": ["Сборка мебели", "Разборка мебели", "Мелкий бытовой ремонт", "Сантехнические работы", "Электромонтажные работы", "Уборка квартиры", "Мытьё окон", "Помощь с переездом", "Погрузка и разгрузка", "Садовые работы"],
+            "Доставка и курьеры": ["Доставка посылок", "Доставка продуктов", "Забрать заказ из магазина", "Курьер на несколько поручений", "Перевозка небольших грузов"],
             "Другое": ["Прочее"],
         }
         for parent_name, children in category_tree.items():
@@ -425,6 +449,29 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id,stage_id,tour_id);
             CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
             CREATE INDEX IF NOT EXISTS idx_submissions_task ON submissions(task_id,id);
+            CREATE TABLE IF NOT EXISTS courier_profiles(
+                user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                city TEXT NOT NULL DEFAULT '',
+                transport TEXT NOT NULL DEFAULT 'walk' CHECK(transport IN ('walk','bicycle','car','motorcycle')),
+                max_weight_kg REAL NOT NULL DEFAULT 5 CHECK(max_weight_kg>0 AND max_weight_kg<=200),
+                max_length_cm REAL NOT NULL DEFAULT 40 CHECK(max_length_cm>0 AND max_length_cm<=500),
+                max_width_cm REAL NOT NULL DEFAULT 30 CHECK(max_width_cm>0 AND max_width_cm<=500),
+                max_height_cm REAL NOT NULL DEFAULT 30 CHECK(max_height_cm>0 AND max_height_cm<=500),
+                max_items INTEGER NOT NULL DEFAULT 1 CHECK(max_items BETWEEN 1 AND 50),
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS task_attachments(
+                id INTEGER PRIMARY KEY,
+                task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                uploader_id INTEGER NOT NULL REFERENCES users(id),
+                file_path TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_size INTEGER NOT NULL CHECK(file_size BETWEEN 1 AND 10485760),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_tasks_irl_city ON tasks(task_mode,city,status);
+            CREATE INDEX IF NOT EXISTS idx_courier_profiles_city ON courier_profiles(city);
+            CREATE INDEX IF NOT EXISTS idx_task_attachments_task ON task_attachments(task_id,id);
             CREATE INDEX IF NOT EXISTS idx_disputes_status ON disputes(status);
             """
         )
