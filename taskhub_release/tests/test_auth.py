@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 # Allow unittest discovery from the repository root as well as taskhub_release/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.auth import verify_telegram_init_data
+from app.auth import create_taskhub_session, verify_taskhub_session, verify_telegram_init_data
 
 
 class TelegramAuthTests(unittest.TestCase):
@@ -51,6 +51,29 @@ class TelegramAuthTests(unittest.TestCase):
     def test_rejects_user_without_integer_id(self):
         data = self.make_init_data(user={"id": "12345"})
         self.assertIsNone(verify_telegram_init_data(data, self.token))
+
+    def test_taskhub_session_is_valid_for_twelve_hours(self):
+        now = 1_800_000_000
+        session = create_taskhub_session(12345, self.token, now=now)
+        self.assertEqual(verify_taskhub_session(session, self.token, now=now + 3600), 12345)
+
+    def test_taskhub_session_expires(self):
+        now = 1_800_000_000
+        session = create_taskhub_session(12345, self.token, now=now)
+        self.assertIsNone(verify_taskhub_session(session, self.token, now=now + 12 * 60 * 60))
+
+    def test_taskhub_session_rejects_tampering_and_wrong_bot_token(self):
+        now = 1_800_000_000
+        session = create_taskhub_session(12345, self.token, now=now)
+        parts = session.split(".")
+        parts[1] = parts[1][:-1] + ("A" if parts[1][-1] != "A" else "B")
+        self.assertIsNone(verify_taskhub_session(".".join(parts), self.token, now=now))
+        self.assertIsNone(verify_taskhub_session(session, "another-bot-token", now=now))
+
+    def test_taskhub_session_rejects_invalid_lifetime(self):
+        now = 1_800_000_000
+        session = create_taskhub_session(12345, self.token, now=now)
+        self.assertIsNone(verify_taskhub_session(session, self.token, now=now + 12 * 60 * 60 + 1))
 
 
 if __name__ == "__main__":
