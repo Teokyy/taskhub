@@ -187,13 +187,16 @@ async def block_legacy_global_api(request, call_next):
     """Keep room data scoped while allowing the independent public marketplace API."""
     path = request.url.path.rstrip("/") or "/"
     allowed = {
-        "/api/me", "/api/health", "/api/session", "/api/onboarding", "/api/categories", "/api/market/profile",
-        "/api/market/tasks", "/api/market/ledger",
+        "/api/me", "/api/health", "/api/session", "/api/onboarding", "/api/categories",
+        "/api/presence", "/api/market/profile", "/api/market/tasks", "/api/market/ledger",
     }
     # Onboarding and category endpoints are global account preferences, not legacy room data.
-    if path.startswith(("/api/onboarding/", "/api/categories/")):
+    if path.startswith((
+        "/api/onboarding/", "/api/categories/", "/api/category-requests/",
+        "/api/market/tasks/", "/api/moderation/disputes/",
+    )):
         allowed.add(path)
-    if path.startswith("/api/market/tasks/"):
+    if path in ("/api/category-requests", "/api/moderation/disputes"):
         allowed.add(path)
     if path.startswith("/api/") and path not in allowed and not path.startswith(("/api/rooms", "/api/market/")):
         try:
@@ -204,7 +207,8 @@ async def block_legacy_global_api(request, call_next):
         except Exception:
             migrated = False
         if migrated:
-            return JSONResponse(status_code=410, content={"detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи."})
+            log.warning("LEGACY_API_BLOCKED method=%s path=%s", request.method, path)
+            return JSONResponse(status_code=410, content={"detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи.", "path": path})
     response = await call_next(request)
     # Telegram WebViews can retain an old Mini App bundle across deployments.
     # Always revalidate the entry point and application bundle so frontend API
