@@ -182,42 +182,49 @@ app = FastAPI(title="TaskHub", lifespan=lifespan)
 app.include_router(room_task_actions_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 
+# Public APIs are independent of a room; legacy global APIs are retired after migration.
+PUBLIC_API_PATHS = frozenset({
+    "/api/me", "/api/health", "/api/session", "/api/presence", "/api/onboarding",
+    "/api/categories", "/api/category-requests", "/api/moderation/disputes",
+    "/api/market/profile", "/api/market/tasks", "/api/market/ledger",
+})
+PUBLIC_API_PREFIXES = (
+    "/api/rooms/", "/api/market/", "/api/onboarding/", "/api/categories/",
+    "/api/category-requests/", "/api/moderation/disputes/",
+)
+
+
+def is_public_api_path(path: str) -> bool:
+    return (
+        path in PUBLIC_API_PATHS
+        or path == "/api/rooms"
+        or path.startswith(PUBLIC_API_PREFIXES)
+    )
+
+
+def rooms_schema_migrated() -> bool:
+    try:
+        with connect() as conn:
+            return conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rooms'"
+            ).fetchone() is not None
+    except Exception:
+        return False
+
+
 @app.middleware("http")
 async def block_legacy_global_api(request, call_next):
-    """Keep room data scoped while allowing the independent public marketplace API."""
+    """Reject retired global endpoints without blocking room or marketplace APIs."""
     path = request.url.path.rstrip("/") or "/"
-    # Category catalogue is a global marketplace resource. Bypass the legacy
-    # room API guard explicitly before evaluating any legacy-route rules.
-    # Keep the raw path in logs so proxy/path-normalization issues are visible.
-    if path == "/api/categories" or path.startswith("/api/categories/"):
-        log.info(
-            "CATEGORY_API_BYPASS method=%s path=%s raw_path=%r",
-            request.method, path, request.scope.get("raw_path"),
+    if path.startswith("/api/") and not is_public_api_path(path) and rooms_schema_migrated():
+        log.warning("LEGACY_API_BLOCKED method=%s path=%s", request.method, path)
+        return JSONResponse(
+            status_code=410,
+            content={
+                "detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи.",
+                "path": path,
+            },
         )
-        return await call_next(request)
-    allowed = {
-        "/api/me", "/api/health", "/api/session", "/api/onboarding", "/api/categories",
-        "/api/presence", "/api/market/profile", "/api/market/tasks", "/api/market/ledger",
-    }
-    # Onboarding and category endpoints are global account preferences, not legacy room data.
-    if path.startswith((
-        "/api/onboarding/", "/api/categories/", "/api/category-requests/",
-        "/api/market/tasks/", "/api/moderation/disputes/",
-    )):
-        allowed.add(path)
-    if path in ("/api/category-requests", "/api/moderation/disputes"):
-        allowed.add(path)
-    if path.startswith("/api/") and path not in allowed and not path.startswith(("/api/rooms", "/api/market/")):
-        try:
-            with connect() as conn:
-                migrated = conn.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='rooms'"
-                ).fetchone() is not None
-        except Exception:
-            migrated = False
-        if migrated:
-            log.warning("LEGACY_API_BLOCKED method=%s path=%s", request.method, path)
-            return JSONResponse(status_code=410, content={"detail": "Этот адрес относится к старому API. Используйте API комнаты или биржи.", "path": path})
     response = await call_next(request)
     # Telegram WebViews can retain an old Mini App bundle across deployments.
     # Always revalidate the entry point and application bundle so frontend API
