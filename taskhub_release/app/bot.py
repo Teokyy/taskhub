@@ -131,22 +131,11 @@ async def start_bot():
                 VALUES(?,?,?,'helper') ON CONFLICT(telegram_id) DO UPDATE SET
                 username=excluded.username,first_name=excluded.first_name""",
                 (telegram_user.id,telegram_user.username,telegram_user.first_name or ""))
-            row=conn.execute("SELECT onboarding_step,onboarding_completed_at,onboarding_skipped_at FROM users WHERE telegram_id=?",(telegram_user.id,)).fetchone()
-        if row["onboarding_completed_at"] or row["onboarding_skipped_at"]:
-            await open_app(message,"С возвращением в TaskHub! Открой приложение или выбери команду бота.")
-        elif row["onboarding_step"]==1:
-            keyboard=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🧾 Ищу исполнителя",callback_data="quest:role:customer")],
-                [InlineKeyboardButton(text="💼 Ищу работу",callback_data="quest:role:executor")],
-                [InlineKeyboardButton(text="🔁 И то, и другое",callback_data="quest:role:both")]
-            ])
-            await message.answer("Прогресс: ▰▱▱\nШаг 1 из 3 — кем ты будешь чаще?",reply_markup=keyboard)
-        elif row["onboarding_step"]==2:
-            await show_category_step(message)
-        elif row["onboarding_step"]==3:
-            await show_first_action(message)
-        else:
-            await show_quest_intro(message)
+        await open_app(
+            message,
+            "Привет! TaskHub — площадка, где можно размещать задания, находить исполнителей и откликаться на работу. Открой приложение, чтобы продолжить.",
+            "exchange"
+        )
 
     @dp.message(Command("quest"))
     async def quest_command(message: Message):
