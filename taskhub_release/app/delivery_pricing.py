@@ -6,7 +6,7 @@ browser must never submit a final price or a weather multiplier.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import isfinite
+from math import ceil, isfinite
 
 MINIMUM_FARE_RUB = 200
 BASE_FARE_RUB = 200
@@ -43,7 +43,7 @@ def calculate_delivery_quote(distance_km: float, weather: str) -> DeliveryQuote:
     if weather not in WEATHER_FACTORS:
         raise ValueError("Неизвестные погодные условия")
     base = BASE_FARE_RUB
-    distance = int(round(distance_km * PER_KM_RUB))
+    distance = int(ceil(distance_km * PER_KM_RUB))
     factor = WEATHER_FACTORS[weather]
     total = max(MINIMUM_FARE_RUB, int(round((base + distance) * factor)))
     return DeliveryQuote(
