@@ -294,6 +294,7 @@ class TaskIn(BaseModel):
     parcel_length_cm: float | None = Field(default=None, gt=0, le=500)
     parcel_width_cm: float | None = Field(default=None, gt=0, le=500)
     parcel_height_cm: float | None = Field(default=None, gt=0, le=500)
+    parcel_count: int = Field(default=1, ge=1, le=50)
     title: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=10000)
     category: str = Field(default="Другое", min_length=1, max_length=120)
@@ -1883,14 +1884,14 @@ async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(de
                pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,budget_reserved_kop,
                status,moderation_status,room_id,task_mode,city,pickup_address,delivery_address,
                pickup_lat,pickup_lon,delivery_lat,delivery_lon,parcel_weight_kg,parcel_length_cm,
-               parcel_width_cm,parcel_height_cm)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               parcel_width_cm,parcel_height_cm,parcel_count)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data.title.strip(), data.description.strip(), category_label, category_id, reward,
              account["id"], account["id"], data.deadline, data.pricing_model, data.norm_minutes,
              data.difficulty, data.urgency, reward, 0, "open", "approved", data.task_mode,
              data.city.strip(), data.pickup_address.strip(), data.delivery_address.strip(),
              data.pickup_lat, data.pickup_lon, data.delivery_lat, data.delivery_lon,
-             data.parcel_weight_kg, data.parcel_length_cm, data.parcel_width_cm, data.parcel_height_cm),
+             data.parcel_weight_kg, data.parcel_length_cm, data.parcel_width_cm, data.parcel_height_cm, data.parcel_count),
         )
         task_id = cur.lastrowid
         conn.execute("INSERT OR IGNORE INTO achievements(user_id,code) VALUES(?,'first_task')",(account["id"],))
@@ -1954,7 +1955,8 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
                 "parcel_weight_kg":task["parcel_weight_kg"] if active_deal else data.parcel_weight_kg,
                 "parcel_length_cm":task["parcel_length_cm"] if active_deal else data.parcel_length_cm,
                 "parcel_width_cm":task["parcel_width_cm"] if active_deal else data.parcel_width_cm,
-                "parcel_height_cm":task["parcel_height_cm"] if active_deal else data.parcel_height_cm}
+                "parcel_height_cm":task["parcel_height_cm"] if active_deal else data.parcel_height_cm,
+                "parcel_count":task["parcel_count"] if active_deal else data.parcel_count}
         for field,new_value in values.items():
             old_value=task[field]
             if str(old_value or "")!=str(new_value or ""):
@@ -1963,12 +1965,12 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
         conn.execute("""UPDATE tasks SET title=?,description=?,category=?,category_id=?,reward_kop=?,deadline=?,
             pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,task_mode=?,city=?,
             pickup_address=?,delivery_address=?,parcel_weight_kg=?,parcel_length_cm=?,parcel_width_cm=?,
-            parcel_height_cm=?,updated_at=CURRENT_TIMESTAMP
+            parcel_height_cm=?,parcel_count=?,updated_at=CURRENT_TIMESTAMP
             WHERE id=? AND created_by=? AND room_id IS NULL""",
             (values["title"],values["description"],values["category"],values["category_id"],values["reward_kop"],values["deadline"],
              values["pricing_model"],values["norm_minutes"],values["difficulty"],values["urgency"],
              values["fixed_reward_kop"],values["task_mode"],values["city"],values["pickup_address"],values["delivery_address"],
-             values["parcel_weight_kg"],values["parcel_length_cm"],values["parcel_width_cm"],values["parcel_height_cm"],task_id,account["id"]))
+             values["parcel_weight_kg"],values["parcel_length_cm"],values["parcel_width_cm"],values["parcel_height_cm"],values["parcel_count"],task_id,account["id"]))
         if active_deal:
             notify_executor=task["executor_telegram_id"]
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
