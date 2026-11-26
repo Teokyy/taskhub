@@ -278,6 +278,18 @@ class StageIn(BaseModel):
 
 
 class TaskIn(BaseModel):
+    task_mode: str = Field(default="online", pattern="^(online|irl)$")
+    city: str = Field(default="", max_length=120)
+    pickup_address: str = Field(default="", max_length=500)
+    delivery_address: str = Field(default="", max_length=500)
+    pickup_lat: float | None = Field(default=None, ge=-90, le=90)
+    pickup_lon: float | None = Field(default=None, ge=-180, le=180)
+    delivery_lat: float | None = Field(default=None, ge=-90, le=90)
+    delivery_lon: float | None = Field(default=None, ge=-180, le=180)
+    parcel_weight_kg: float | None = Field(default=None, gt=0, le=200)
+    parcel_length_cm: float | None = Field(default=None, gt=0, le=500)
+    parcel_width_cm: float | None = Field(default=None, gt=0, le=500)
+    parcel_height_cm: float | None = Field(default=None, gt=0, le=500)
     title: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=10000)
     category: str = Field(default="Другое", min_length=1, max_length=120)
@@ -296,6 +308,10 @@ class TaskIn(BaseModel):
 
     @model_validator(mode="after")
     def validate_pricing(self):
+        if self.task_mode == "irl" and not self.city.strip():
+            raise ValueError("Для задания IRL укажи город")
+        if self.task_mode == "online" and any((self.pickup_address, self.delivery_address)):
+            raise ValueError("Адреса доставки доступны только для IRL-заданий")
         if self.pricing_model not in {"fixed", "normative"}:
             raise ValueError("Модель оплаты: fixed или normative")
         if self.difficulty not in DIFFICULTY_FACTORS:
@@ -339,6 +355,16 @@ class OnboardingUpdateIn(BaseModel):
     role_flags: str | None = Field(default=None, pattern="^(customer|executor|both)$")
     completed: bool | None = None
     skipped: bool | None = None
+
+
+class CourierProfileIn(BaseModel):
+    city: str = Field(min_length=2, max_length=120)
+    transport: str = Field(default="walk", pattern="^(walk|bicycle|car|motorcycle)$")
+    max_weight_kg: float = Field(default=5, gt=0, le=200)
+    max_length_cm: float = Field(default=40, gt=0, le=500)
+    max_width_cm: float = Field(default=30, gt=0, le=500)
+    max_height_cm: float = Field(default=30, gt=0, le=500)
+    max_items: int = Field(default=1, ge=1, le=50)
 
 
 class MarketResponseIn(BaseModel):
@@ -1589,6 +1615,30 @@ def market_profile(x_telegram_init_data: str = Header(default="", alias="X-Teleg
     return {"user": account, "balance_kop": balance, "counts": counts, "created_count": created, "rating_average": reputation["average"] or 0, "review_count": reputation["review_count"], "achievements": achievements, "tasks": [dict(r) for r in mine]}
 
 
+@app.get("/api/market/courier-profile")
+def get_courier_profile(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM courier_profiles WHERE user_id=?", (account["id"],)).fetchone()
+    return dict(row) if row else None
+
+
+@app.put("/api/market/courier-profile")
+def save_courier_profile(data: CourierProfileIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        conn.execute("""INSERT INTO courier_profiles(
+            user_id,city,transport,max_weight_kg,max_length_cm,max_width_cm,max_height_cm,max_items)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(user_id) DO UPDATE SET city=excluded.city,transport=excluded.transport,
+            max_weight_kg=excluded.max_weight_kg,max_length_cm=excluded.max_length_cm,
+            max_width_cm=excluded.max_width_cm,max_height_cm=excluded.max_height_cm,
+            max_items=excluded.max_items,updated_at=CURRENT_TIMESTAMP""",
+            (account["id"],data.city.strip(),data.transport,data.max_weight_kg,
+             data.max_length_cm,data.max_width_cm,data.max_height_cm,data.max_items))
+        return dict(conn.execute("SELECT * FROM courier_profiles WHERE user_id=?", (account["id"],)).fetchone())
+
+
 @app.get("/api/market/ledger")
 def market_ledger(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
@@ -1651,11 +1701,16 @@ async def create_market_task(data: TaskIn, x_telegram_init_data: str = Header(de
         cur = conn.execute(
             """INSERT INTO tasks(title,description,category,category_id,reward_kop,created_by,author_id,deadline,
                pricing_model,norm_minutes,difficulty,urgency,fixed_reward_kop,budget_reserved_kop,
-               status,moderation_status,room_id)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+               status,moderation_status,room_id,task_mode,city,pickup_address,delivery_address,
+               pickup_lat,pickup_lon,delivery_lat,delivery_lon,parcel_weight_kg,parcel_length_cm,
+               parcel_width_cm,parcel_height_cm)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (data.title.strip(), data.description.strip(), category_label, category_id, reward,
              account["id"], account["id"], data.deadline, data.pricing_model, data.norm_minutes,
-             data.difficulty, data.urgency, reward, 0, "open", "approved"),
+             data.difficulty, data.urgency, reward, 0, "open", "approved", data.task_mode,
+             data.city.strip(), data.pickup_address.strip(), data.delivery_address.strip(),
+             data.pickup_lat, data.pickup_lon, data.delivery_lat, data.delivery_lon,
+             data.parcel_weight_kg, data.parcel_length_cm, data.parcel_width_cm, data.parcel_height_cm),
         )
         task_id = cur.lastrowid
         conn.execute("INSERT OR IGNORE INTO achievements(user_id,code) VALUES(?,'first_task')",(account["id"],))
