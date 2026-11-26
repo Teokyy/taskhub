@@ -360,6 +360,7 @@ def init_db():
             "parcel_length_cm REAL",
             "parcel_width_cm REAL",
             "parcel_height_cm REAL",
+            "parcel_count INTEGER NOT NULL DEFAULT 1",
             "delivery_distance_km REAL",
             "delivery_weather TEXT",
             "delivery_weather_factor REAL",
