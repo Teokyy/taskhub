@@ -351,6 +351,10 @@ class MarketReviewIn(BaseModel):
     text: str = Field(default="", max_length=500)
 
 
+class MarketCompletionIn(BaseModel):
+    actual_payment_rub: int = Field(ge=0, le=1000000000)
+
+
 class DisputeResolutionIn(BaseModel):
     decision: str = Field(pattern="^(done|cancelled|reopen)$")
     comment: str = Field(default="", max_length=2000)
@@ -2137,7 +2141,7 @@ async def request_market_cancellation(task_id: int, x_telegram_init_data: str = 
 
 
 @app.post("/api/market/tasks/{task_id}/complete")
-async def complete_market_task(task_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+async def complete_market_task(task_id: int, data: MarketCompletionIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data)
     with connect() as conn:
         task=conn.execute("""SELECT t.*,r.id response_id,executor.telegram_id executor_telegram_id,
@@ -2147,9 +2151,12 @@ async def complete_market_task(task_id: int, x_telegram_init_data: str = Header(
             JOIN users owner ON owner.id=t.created_by
             WHERE t.id=? AND t.created_by=? AND t.room_id IS NULL AND t.status='in_progress'""",(task_id,account["id"])).fetchone()
         if not task: raise HTTPException(404,"Активная сделка не найдена")
-        conn.execute("UPDATE tasks SET status='done',completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(task_id,))
+        conn.execute("""UPDATE tasks SET status='done',actual_payment_kop=?,actual_payment_recorded_at=CURRENT_TIMESTAMP,
+            completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status='in_progress'""",
+            (data.actual_payment_rub * 100, task_id))
         conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id=?",(task["response_id"],))
-        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)",(account["id"],"complete_market_task","task",task_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+            (account["id"],"complete_market_task","task",task_id,f"actual_payment_rub={data.actual_payment_rub}"))
     reminder=f"🎉 Сделка «{task['title']}» завершена. Не забудьте оставить друг другу отзыв в TaskHub."
     await notify_telegram(task["executor_telegram_id"],reminder)
     await notify_telegram(task["owner_telegram_id"],reminder)
