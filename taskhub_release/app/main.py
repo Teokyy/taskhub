@@ -1004,6 +1004,46 @@ def get_rooms(x_telegram_init_data: str = Header(default="", alias="X-Telegram-I
         return list_rooms(conn, account["id"])
 
 
+@app.put("/api/rooms/{room_id}")
+def rename_room(room_id: int, data: RoomIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    name = data.name.strip()
+    if not name or len(name) > 80:
+        raise HTTPException(422, "Название комнаты должно содержать от 1 до 80 символов")
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            member = require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        if member["room_role"] != "owner":
+            raise HTTPException(403, "Переименовать комнату может только владелец")
+        conn.execute("UPDATE rooms SET name=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND archived_at IS NULL", (name, room_id))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
+                     (account["id"], "rename_room", "room", room_id, name))
+        return dict(conn.execute("SELECT id,name,owner_id FROM rooms WHERE id=?", (room_id,)).fetchone())
+
+
+@app.delete("/api/rooms/{room_id}")
+def archive_room(room_id: int, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    account = user(x_telegram_init_data)
+    with connect() as conn:
+        ensure_rooms_schema(conn)
+        try:
+            member = require_room_admin(conn, room_id, account["id"])
+        except RoomError as error:
+            room_error(error)
+        if member["room_role"] != "owner":
+            raise HTTPException(403, "Удалить комнату может только владелец")
+        active = conn.execute("SELECT id FROM tasks WHERE room_id=? AND status IN ('in_progress','revision','submitted') LIMIT 1", (room_id,)).fetchone()
+        if active:
+            raise HTTPException(409, f"Нельзя удалить комнату: сначала закрой задачу №{active['id']}")
+        conn.execute("UPDATE rooms SET archived_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=? AND archived_at IS NULL", (room_id,))
+        conn.execute("UPDATE room_invites SET revoked_at=CURRENT_TIMESTAMP WHERE room_id=? AND revoked_at IS NULL", (room_id,))
+        conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id) VALUES(?,?,?,?)", (account["id"], "archive_room", "room", room_id))
+        return {"ok": True, "archived": True}
+
+
 @app.post("/api/rooms")
 def post_room(data: RoomIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account = user(x_telegram_init_data)
