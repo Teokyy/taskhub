@@ -1671,12 +1671,12 @@ def _delivery_weather(lat: float, lon: float, route_duration_seconds: float = 0)
     probability = int((hourly.get("precipitation_probability") or [0])[index] or 0)
     if code in (56, 57, 66, 67):
         return "ice"
-    if temp <= -15:
-        return "strong_frost"
     if code in (71, 73, 75, 77, 85, 86) or snow > 0:
         return "snow"
     if code in (65, 82) or rain >= 7.5 or probability >= 80 and rain > 0:
         return "heavy_rain"
+    if temp <= -15:
+        return "strong_frost"
     if code in (51, 53, 55, 61, 63, 80, 81) or rain > 0:
         return "rain"
     return "clear"
