@@ -1644,25 +1644,33 @@ def _geocode_delivery_address(city: str, address: str):
     return float(rows[0]["lon"]), float(rows[0]["lat"])
 
 
-def _delivery_weather(lat: float, lon: float):
+def _delivery_weather(lat: float, lon: float, route_duration_seconds: float = 0):
     query = urllib.parse.urlencode({
         "latitude": lat, "longitude": lon,
-        "current": "temperature_2m,precipitation,rain,snowfall,weather_code",
-        "timezone": "auto",
+        "current": "temperature_2m",
+        "hourly": "temperature_2m,precipitation_probability,rain,snowfall,weather_code",
+        "forecast_days": 2, "timezone": "auto",
     })
     payload = _provider_json("https://api.open-meteo.com/v1/forecast?" + query)
-    current = payload.get("current") or {}
-    code = int(current.get("weather_code", 0))
-    temp = float(current.get("temperature_2m", 10))
-    rain = float(current.get("rain", 0) or 0)
-    snow = float(current.get("snowfall", 0) or 0)
+    hourly = payload.get("hourly") or {}
+    times = hourly.get("time") or []
+    if not times:
+        return "clear"
+    current = datetime.fromisoformat((payload.get("current") or {}).get("time", times[0]))
+    target = current + timedelta(seconds=max(0, route_duration_seconds) / 2)
+    index = min(range(len(times)), key=lambda i: abs((datetime.fromisoformat(times[i]) - target).total_seconds()))
+    code = int((hourly.get("weather_code") or [0])[index] or 0)
+    temp = float((hourly.get("temperature_2m") or [10])[index] or 10)
+    rain = float((hourly.get("rain") or [0])[index] or 0)
+    snow = float((hourly.get("snowfall") or [0])[index] or 0)
+    probability = int((hourly.get("precipitation_probability") or [0])[index] or 0)
     if code in (56, 57, 66, 67):
         return "ice"
     if temp <= -15:
         return "strong_frost"
     if code in (71, 73, 75, 77, 85, 86) or snow > 0:
         return "snow"
-    if code in (65, 82) or rain >= 7.5:
+    if code in (65, 82) or rain >= 7.5 or probability >= 80 and rain > 0:
         return "heavy_rain"
     if code in (51, 53, 55, 61, 63, 80, 81) or rain > 0:
         return "rain"
@@ -1695,7 +1703,7 @@ def calculate_market_delivery_quote(task_id: int, data: DeliveryQuoteIn, x_teleg
         if not routes:
             raise HTTPException(422, "Не удалось построить автомобильный маршрут")
         distance_km = float(routes[0]["distance"]) / 1000
-        weather = _delivery_weather((data.start_lat + pickup_lat + delivery_lat) / 3, (data.start_lon + pickup_lon + delivery_lon) / 3)
+        weather = _delivery_weather((data.start_lat + pickup_lat + delivery_lat) / 3, (data.start_lon + pickup_lon + delivery_lon) / 3, float(routes[0].get('duration') or 0))
         from .delivery_pricing import calculate_delivery_quote
         quote = calculate_delivery_quote(distance_km, weather)
         pay_kop = quote.total_rub * 100
