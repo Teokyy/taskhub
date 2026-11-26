@@ -185,11 +185,14 @@ app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 @app.middleware("http")
 async def block_legacy_global_api(request, call_next):
     """Keep room data scoped while allowing the independent public marketplace API."""
-    path = request.url.path
+    path = request.url.path.rstrip("/") or "/"
     allowed = {
         "/api/me", "/api/health", "/api/onboarding", "/api/categories", "/api/market/profile",
         "/api/market/tasks", "/api/market/ledger",
     }
+    # Onboarding and category endpoints are global account preferences, not legacy room data.
+    if path.startswith(("/api/onboarding/", "/api/categories/")):
+        allowed.add(path)
     if path.startswith("/api/market/tasks/"):
         allowed.add(path)
     if path.startswith("/api/") and path not in allowed and not path.startswith(("/api/rooms", "/api/market/")):
