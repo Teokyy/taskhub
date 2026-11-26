@@ -1,16 +1,58 @@
+import logging
 import os
 import sqlite3
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+APP_DB_PATH = Path(__file__).resolve().parent.parent / "taskhub.sqlite3"
+VOLUME_MOUNT_PATH = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+CONFIGURED_DB_PATH = os.getenv("DB_PATH", "").strip()
 DB_PATH = Path(
-    os.getenv(
-        "DB_PATH",
-        "/data/taskhub.sqlite3"
-        if os.getenv("RAILWAY_VOLUME_MOUNT_PATH")
-        else str(Path(__file__).resolve().parent.parent / "taskhub.sqlite3"),
-    )
+    CONFIGURED_DB_PATH
+    or (str(Path(VOLUME_MOUNT_PATH) / "taskhub.sqlite3") if VOLUME_MOUNT_PATH else str(APP_DB_PATH))
 )
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _migrate_ephemeral_database_once():
+    """Copy the pre-volume SQLite database to persistent storage without overwriting data."""
+    if not VOLUME_MOUNT_PATH or CONFIGURED_DB_PATH:
+        return
+    if DB_PATH.exists():
+        log.info("DATABASE_VOLUME_TARGET_EXISTS path=%s; migration skipped", DB_PATH)
+        return
+    if not APP_DB_PATH.is_file():
+        log.warning("DATABASE_VOLUME_SOURCE_MISSING source=%s target=%s", APP_DB_PATH, DB_PATH)
+        return
+    temporary_path = DB_PATH.with_name(DB_PATH.name + ".migrating")
+    try:
+        if temporary_path.exists():
+            temporary_path.unlink()
+        with sqlite3.connect(f"file:{APP_DB_PATH}?mode=ro", uri=True) as source:
+            with sqlite3.connect(temporary_path) as target:
+                source.backup(target)
+                integrity = target.execute("PRAGMA integrity_check").fetchone()
+                if not integrity or integrity[0] != "ok":
+                    raise sqlite3.DatabaseError(f"SQLite integrity check failed: {integrity}")
+        os.replace(temporary_path, DB_PATH)
+        log.warning(
+            "DATABASE_VOLUME_MIGRATED source=%s target=%s bytes=%s",
+            APP_DB_PATH, DB_PATH, DB_PATH.stat().st_size,
+        )
+    except Exception:
+        try:
+            temporary_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        log.exception("DATABASE_VOLUME_MIGRATION_FAILED source=%s target=%s", APP_DB_PATH, DB_PATH)
+        raise
+
+
+_migrate_ephemeral_database_once()
+log.info(
+    "DATABASE_CONFIG path=%s volume_mounted=%s exists=%s",
+    DB_PATH, bool(VOLUME_MOUNT_PATH), DB_PATH.exists(),
+)
 
 
 def connect():
