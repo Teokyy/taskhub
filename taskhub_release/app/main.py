@@ -1766,18 +1766,29 @@ async def update_market_task(task_id: int, data: MarketTaskUpdate, x_telegram_in
                 "norm_minutes":task["norm_minutes"] if active_deal else data.norm_minutes,
                 "difficulty":task["difficulty"] if active_deal else data.difficulty,
                 "urgency":task["urgency"] if active_deal else data.urgency,
-                "fixed_reward_kop":task["fixed_reward_kop"] if active_deal else reward}
+                "fixed_reward_kop":task["fixed_reward_kop"] if active_deal else reward,
+                "task_mode":task["task_mode"] if active_deal else data.task_mode,
+                "city":task["city"] if active_deal else data.city.strip(),
+                "pickup_address":task["pickup_address"] if active_deal else data.pickup_address.strip(),
+                "delivery_address":task["delivery_address"] if active_deal else data.delivery_address.strip(),
+                "parcel_weight_kg":task["parcel_weight_kg"] if active_deal else data.parcel_weight_kg,
+                "parcel_length_cm":task["parcel_length_cm"] if active_deal else data.parcel_length_cm,
+                "parcel_width_cm":task["parcel_width_cm"] if active_deal else data.parcel_width_cm,
+                "parcel_height_cm":task["parcel_height_cm"] if active_deal else data.parcel_height_cm}
         for field,new_value in values.items():
             old_value=task[field]
             if str(old_value or "")!=str(new_value or ""):
                 conn.execute("INSERT INTO task_history(task_id,changed_by,field,old_value,new_value) VALUES(?,?,?,?,?)",
                              (task_id,account["id"],field,str(old_value) if old_value is not None else None,str(new_value) if new_value is not None else None))
         conn.execute("""UPDATE tasks SET title=?,description=?,category=?,category_id=?,reward_kop=?,deadline=?,
-            pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,updated_at=CURRENT_TIMESTAMP
+            pricing_model=?,norm_minutes=?,difficulty=?,urgency=?,fixed_reward_kop=?,task_mode=?,city=?,
+            pickup_address=?,delivery_address=?,parcel_weight_kg=?,parcel_length_cm=?,parcel_width_cm=?,
+            parcel_height_cm=?,updated_at=CURRENT_TIMESTAMP
             WHERE id=? AND created_by=? AND room_id IS NULL""",
             (values["title"],values["description"],values["category"],values["category_id"],values["reward_kop"],values["deadline"],
              values["pricing_model"],values["norm_minutes"],values["difficulty"],values["urgency"],
-             values["fixed_reward_kop"],task_id,account["id"]))
+             values["fixed_reward_kop"],values["task_mode"],values["city"],values["pickup_address"],values["delivery_address"],
+             values["parcel_weight_kg"],values["parcel_length_cm"],values["parcel_width_cm"],values["parcel_height_cm"],task_id,account["id"]))
         if active_deal:
             notify_executor=task["executor_telegram_id"]
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
