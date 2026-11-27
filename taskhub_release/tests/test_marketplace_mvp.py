@@ -339,12 +339,24 @@ class MarketplaceMvpTests(unittest.TestCase):
             f"/api/market/chats/{chat_id}/messages",
             headers=self.headers("executor"),
         )
-        self.assertEqual(len(own_history.json()), 1)
+        self.assertEqual(own_history.json(), [])
         customer_history = self.client.get(
             f"/api/market/chats/{chat_id}/messages",
             headers=self.headers("customer"),
         )
-        self.assertEqual(customer_history.json(), [])
+        self.assertEqual(len(customer_history.json()), 1)
+        self.assertEqual(customer_history.json()[0]["text"], "Conversation visible to moderator")
+        # Each participant can hide the same message only from their own view.
+        hidden_by_customer = self.client.post(
+            f"/api/market/messages/{sent.json()['id']}/hide",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(hidden_by_customer.status_code, 200, hidden_by_customer.text)
+        customer_history_after_hide = self.client.get(
+            f"/api/market/chats/{chat_id}/messages",
+            headers=self.headers("customer"),
+        )
+        self.assertEqual(customer_history_after_hide.json(), [])
         contact_message = self.client.post(
             f"/api/market/chats/{chat_id}/messages",
             headers=self.headers("executor"),
