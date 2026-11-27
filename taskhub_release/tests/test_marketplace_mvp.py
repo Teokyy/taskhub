@@ -399,7 +399,7 @@ class MarketplaceMvpTests(unittest.TestCase):
             json={"decision": "cancelled", "comment": "Resolved by moderator"},
         )
         self.assertEqual(resolved.status_code, 200, resolved.text)
-        notified_ids = [call.args[0] for call in self.notify_patch.await_args_list]
+        notified_ids = [call.args[0] for call in main.notify_telegram.await_args_list]
         self.assertIn(101, notified_ids)
         self.assertIn(202, notified_ids)
         self.assertNotIn(303, notified_ids, "Withdrawn applicant must not receive the active-deal resolution notice")
