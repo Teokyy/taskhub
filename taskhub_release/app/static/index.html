@@ -50,7 +50,7 @@
 
     /* Compact bottom navigation */
     .nav{padding:7px 12px calc(7px + env(safe-area-inset-bottom));background:rgba(14,18,14,.97);border-top:1px solid #273027;backdrop-filter:blur(22px)}
-    .nav-inner{max-width:560px;gap:5px;grid-template-columns:repeat(4,minmax(0,1fr))}
+    .nav-inner{max-width:560px;gap:5px;grid-template-columns:repeat(3,minmax(0,1fr))}
     .nav button{position:relative;min-width:0;border:1px solid transparent;background:transparent;color:#879184;border-radius:13px;padding:8px 2px 7px;font-size:10px;letter-spacing:0;font-weight:700;gap:4px;transition:background .18s ease,color .18s ease}
     .nav button .ico{font-size:17px;line-height:1.1;opacity:.82}
     .nav button.active{background:#283326;border-color:#394832;color:var(--lime)}
@@ -131,9 +131,11 @@
     .pill{background:#293d25;color:#d0f4b5;border-color:#48633d}
     .positive{color:var(--lime)}
     .field:focus{border-color:var(--lime);box-shadow:0 0 0 2px #9be66b20}
-    .balance-card{background:var(--lime)!important;color:var(--lime-ink);border-color:#b7f18f!important;box-shadow:0 10px 28px #0002}
-    .balance-card .eyebrow,.balance-card .muted{color:#38512b}
-    .balance-card .btn.secondary{background:#294323;border-color:#294323;color:#efffe6}
+    .balance-card{background:linear-gradient(120deg,#263b25,#1b2b1d)!important;color:#f2f7ec;border:1px solid #557348!important;box-shadow:0 10px 28px #0002}
+    .balance-card .eyebrow{color:#c5d8b9}
+    .balance-card .balance-amount{color:#d8f5a6}
+    .balance-card .balance-caption,.balance-card .muted{color:#c0cdb8}
+    .balance-card .balance-open{background:#c7f36b;color:#17200c;border:0}
     @media(max-width:370px){.nav-inner{gap:3px}.nav button{font-size:10px;padding-left:2px;padding-right:2px}}
 \n
 /* Light theme */
