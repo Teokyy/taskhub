@@ -2223,9 +2223,12 @@ def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-T
             opener.first_name opened_by_name,customer.first_name customer_name,executor.first_name executor_name
             FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users opener ON opener.id=d.user_id
             JOIN users customer ON customer.id=t.created_by
-            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN responses r ON r.id=(
+                SELECT r2.id FROM responses r2 WHERE r2.task_id=t.id
+                ORDER BY CASE WHEN r2.status='accepted' THEN 0 ELSE 1 END, r2.id DESC LIMIT 1
+            )
             LEFT JOIN users executor ON executor.id=r.executor_id
-            WHERE d.status='open' ORDER BY d.created_at""").fetchall()
+            WHERE d.status='open' ORDER BY d.created_at,d.id""").fetchall()
     return [dict(x) for x in rows]
 
 
@@ -2233,10 +2236,14 @@ def moderator_disputes(x_telegram_init_data: str = Header(default="", alias="X-T
 async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
     account=user(x_telegram_init_data);moderator(account)
     with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         row=conn.execute("""SELECT d.*,t.title,t.status task_status,t.created_by,
             owner.telegram_id owner_telegram_id,r.executor_id,executor.telegram_id executor_telegram_id
             FROM disputes d JOIN tasks t ON t.id=d.task_id JOIN users owner ON owner.id=t.created_by
-            LEFT JOIN responses r ON r.task_id=t.id AND r.status IN ('accepted','withdrawn')
+            LEFT JOIN responses r ON r.id=(
+                SELECT r2.id FROM responses r2 WHERE r2.task_id=t.id
+                ORDER BY CASE WHEN r2.status='accepted' THEN 0 ELSE 1 END, r2.id DESC LIMIT 1
+            )
             LEFT JOIN users executor ON executor.id=r.executor_id
             WHERE d.id=? AND d.status='open'""",(dispute_id,)).fetchone()
         if not row: raise HTTPException(404,"Открытая жалоба не найдена")
@@ -2254,8 +2261,11 @@ async def resolve_market_dispute(dispute_id: int, data: DisputeResolutionIn, x_t
             conn.execute("UPDATE responses SET status='withdrawn',updated_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='accepted'",(row["task_id"],))
             conn.execute("UPDATE task_cancel_requests SET status='rejected',resolved_at=CURRENT_TIMESTAMP WHERE task_id=? AND status='pending'",(row["task_id"],))
             conn.execute("UPDATE chats SET closed_at=CURRENT_TIMESTAMP WHERE response_id IN (SELECT id FROM responses WHERE task_id=?)",(row["task_id"],))
-        conn.execute("UPDATE disputes SET status='resolved',admin_decision=?,admin_comment=?,resolved_at=CURRENT_TIMESTAMP WHERE id=?",
-                     (data.decision,data.comment.strip(),dispute_id))
+        resolved=conn.execute("""UPDATE disputes SET status='resolved',admin_decision=?,admin_comment=?,
+            resolved_at=CURRENT_TIMESTAMP WHERE id=? AND status='open'""",
+            (data.decision,data.comment.strip(),dispute_id))
+        if resolved.rowcount != 1:
+            raise HTTPException(409,"Жалоба уже рассмотрена другим модератором")
         conn.execute("INSERT INTO audit(actor_id,action,object_type,object_id,details) VALUES(?,?,?,?,?)",
                      (account["id"],"resolve_dispute","dispute",dispute_id,f"{data.decision};{data.comment.strip()}"))
     notice=f"Модератор рассмотрел жалобу по сделке «{row['title']}». Решение: {data.decision}. {data.comment}".strip()
