@@ -1389,6 +1389,11 @@ def health():
 
 @app.post("/api/session")
 def create_session(x_telegram_init_data: str = Header(default="", alias="X-Telegram-Init-Data")):
+    # Session tokens authenticate API requests, but must never be exchangeable
+    # for fresh sessions. Otherwise a stolen 12-hour bearer token can be
+    # renewed indefinitely without returning to Telegram for fresh initData.
+    if x_telegram_init_data.startswith("th1."):
+        raise HTTPException(401, "Для продления сессии откройте TaskHub через Telegram.")
     account = user(x_telegram_init_data)
     session_token = create_taskhub_session(account["telegram_id"], _taskhub_session_secret())
     return {"token": session_token, "expires_in": 12 * 60 * 60}
