@@ -35,6 +35,7 @@
     .nav button .ico{font-size:18px;line-height:1.1}.nav button.active{background:#293128;color:var(--lime)}
     .field{width:100%;border:1px solid var(--line);background:#111611;color:var(--text);border-radius:12px;padding:13px;margin:6px 0 12px;outline:none}
     .field:focus{border-color:#91b64b}textarea.field{min-height:105px;resize:vertical}
+    .grid-2,.grid-3{display:grid;gap:9px}.grid-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-2 .field,.grid-3 .field{min-width:0}@media(max-width:380px){.grid-3{grid-template-columns:1fr 1fr}}
     label{display:block;color:var(--muted);font-size:12px;font-weight:700;margin-top:7px}
     .empty{padding:28px 18px;text-align:center;color:var(--muted);background:var(--panel);border:1px dashed #3a4539;border-radius:18px}.empty b{display:block;color:var(--text);margin-bottom:5px}
     .profile-name{font-size:22px;font-weight:850;letter-spacing:-.7px}.balance-card{display:flex;align-items:center;justify-content:space-between;gap:14px;background:linear-gradient(120deg,#243522,#1c291c);border:1px solid #536b3e}.balance-amount{font-size:28px;font-weight:900;color:#d3f58a;margin-top:4px}.balance-caption{font-size:11px;color:#bdc8b2;margin-top:3px}.balance-open{background:#c7f36b;color:#17200c;white-space:nowrap}
@@ -227,7 +228,7 @@ html[data-theme="light"] .nav{
     <button data-tab="profile"><span class="ico">◉</span>Профиль</button>
   </div></nav>
   <div id="toast" class="toast" hidden></div>
-  <script src="/static/app.js?v=41"></script>
+  <script src="/static/app.js?v=42"></script>
   <script src="/static/budget.js?v=2"></script>
   <script>
     document.addEventListener('click', async event => {
