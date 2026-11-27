@@ -314,6 +314,12 @@ class MarketplaceMvpTests(unittest.TestCase):
 
     def test_dispute_moderator_can_read_full_chat_and_resolve(self):
         task_id = self.create_task()
+        # A previous withdrawn applicant must not be mistaken for the active executor.
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO responses(task_id,executor_id,message,status) VALUES(?,?,?,'withdrawn')",
+                (task_id, self.accounts["outsider"]["id"], "Old withdrawn application"),
+            )
         response = self.client.post(
             f"/api/market/tasks/{task_id}/responses",
             headers=self.headers("executor"),
@@ -377,6 +383,8 @@ class MarketplaceMvpTests(unittest.TestCase):
         self.assertEqual(dispute.status_code, 200, dispute.text)
         queue = self.client.get("/api/moderation/disputes", headers=self.headers("customer"))
         self.assertEqual(queue.status_code, 200, queue.text)
+        self.assertEqual(len(queue.json()), 1, "One dispute must produce one moderator queue row")
+        self.assertEqual(queue.json()[0]["executor_name"], "Executor")
         dispute_id = queue.json()[0]["id"]
         transcript = self.client.get(
             f"/api/moderation/disputes/{dispute_id}/chat",
@@ -391,6 +399,10 @@ class MarketplaceMvpTests(unittest.TestCase):
             json={"decision": "cancelled", "comment": "Resolved by moderator"},
         )
         self.assertEqual(resolved.status_code, 200, resolved.text)
+        notified_ids = [call.args[0] for call in main.notify_telegram.await_args_list]
+        self.assertIn(101, notified_ids)
+        self.assertIn(202, notified_ids)
+        self.assertNotIn(303, notified_ids, "Withdrawn applicant must not receive the active-deal resolution notice")
 
     def test_subscriptions_are_limited_to_twenty(self):
         tree = self.client.get("/api/categories", headers=self.headers("customer")).json()
